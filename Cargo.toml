@@ -1,0 +1,13 @@
+[package]
+name = "bonnie-rs"
+version = "0.1.0"
+edition = "2021"
+description = "PS1-style software rasterizer engine"
+authors = ["ebonura"]
+
+[dependencies]
+macroquad = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = true

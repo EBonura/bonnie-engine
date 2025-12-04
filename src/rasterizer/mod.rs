@@ -1,0 +1,20 @@
+//! PS1-style software rasterizer
+//! Ported from tipsy (https://github.com/nkanaev/tipsy)
+//!
+//! Features:
+//! - Affine texture mapping (no perspective correction = PS1 warping)
+//! - Vertex snapping (integer coords = PS1 jitter)
+//! - Flat and Gouraud shading
+//! - Z-buffer or painter's algorithm
+
+mod math;
+mod types;
+mod render;
+
+pub use math::*;
+pub use types::*;
+pub use render::*;
+
+/// Screen dimensions (authentic PS1 resolution)
+pub const WIDTH: usize = 320;
+pub const HEIGHT: usize = 240;

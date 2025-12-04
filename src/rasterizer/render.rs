@@ -1,0 +1,400 @@
+//! Core rendering functions
+//! Triangle rasterization with PS1-style effects
+
+use super::math::{barycentric, perspective_transform, project, Vec3};
+use super::types::{Color, Face, RasterSettings, ShadingMode, Texture, Vertex};
+use super::{HEIGHT, WIDTH};
+
+/// Framebuffer for software rendering
+pub struct Framebuffer {
+    pub pixels: Vec<u8>,    // RGBA, 4 bytes per pixel
+    pub zbuffer: Vec<f32>,  // Depth buffer
+    pub width: usize,
+    pub height: usize,
+}
+
+impl Framebuffer {
+    pub fn new(width: usize, height: usize) -> Self {
+        Self {
+            pixels: vec![0; width * height * 4],
+            zbuffer: vec![f32::MAX; width * height],
+            width,
+            height,
+        }
+    }
+
+    pub fn clear(&mut self, color: Color) {
+        for i in 0..(self.width * self.height) {
+            let bytes = color.to_bytes();
+            self.pixels[i * 4] = bytes[0];
+            self.pixels[i * 4 + 1] = bytes[1];
+            self.pixels[i * 4 + 2] = bytes[2];
+            self.pixels[i * 4 + 3] = bytes[3];
+            self.zbuffer[i] = f32::MAX;
+        }
+    }
+
+    pub fn set_pixel(&mut self, x: usize, y: usize, color: Color) {
+        if x < self.width && y < self.height {
+            let idx = (y * self.width + x) * 4;
+            let bytes = color.to_bytes();
+            self.pixels[idx] = bytes[0];
+            self.pixels[idx + 1] = bytes[1];
+            self.pixels[idx + 2] = bytes[2];
+            self.pixels[idx + 3] = bytes[3];
+        }
+    }
+
+    pub fn set_pixel_with_depth(&mut self, x: usize, y: usize, z: f32, color: Color) -> bool {
+        if x < self.width && y < self.height {
+            let idx = y * self.width + x;
+            if z < self.zbuffer[idx] {
+                self.zbuffer[idx] = z;
+                let pixel_idx = idx * 4;
+                let bytes = color.to_bytes();
+                self.pixels[pixel_idx] = bytes[0];
+                self.pixels[pixel_idx + 1] = bytes[1];
+                self.pixels[pixel_idx + 2] = bytes[2];
+                self.pixels[pixel_idx + 3] = bytes[3];
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Camera state
+pub struct Camera {
+    pub position: Vec3,
+    pub rotation_x: f32, // Pitch
+    pub rotation_y: f32, // Yaw
+
+    // Computed basis vectors
+    pub basis_x: Vec3,
+    pub basis_y: Vec3,
+    pub basis_z: Vec3,
+}
+
+impl Camera {
+    pub fn new() -> Self {
+        let mut cam = Self {
+            position: Vec3::ZERO,
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            basis_x: Vec3::new(1.0, 0.0, 0.0),
+            basis_y: Vec3::new(0.0, 1.0, 0.0),
+            basis_z: Vec3::new(0.0, 0.0, 1.0),
+        };
+        cam.update_basis();
+        cam
+    }
+
+    pub fn update_basis(&mut self) {
+        let upward = Vec3::UP;
+
+        // Forward vector based on rotation
+        self.basis_z = Vec3 {
+            x: self.rotation_x.cos() * self.rotation_y.sin(),
+            y: -self.rotation_x.sin(),
+            z: self.rotation_x.cos() * self.rotation_y.cos(),
+        };
+
+        // Right vector
+        self.basis_x = upward.cross(self.basis_z).normalize();
+
+        // Up vector
+        self.basis_y = self.basis_z.cross(self.basis_x);
+    }
+
+    pub fn rotate(&mut self, dx: f32, dy: f32) {
+        self.rotation_y += dy;
+        self.rotation_x = (self.rotation_x + dx).clamp(
+            -std::f32::consts::FRAC_PI_2 + 0.01,
+            std::f32::consts::FRAC_PI_2 - 0.01,
+        );
+        self.update_basis();
+    }
+}
+
+impl Default for Camera {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Projected surface (triangle ready for rasterization)
+struct Surface {
+    pub v1: Vec3, // Screen-space vertex 1
+    pub v2: Vec3, // Screen-space vertex 2
+    pub v3: Vec3, // Screen-space vertex 3
+    pub vn1: Vec3, // Vertex normal 1 (camera space)
+    pub vn2: Vec3, // Vertex normal 2
+    pub vn3: Vec3, // Vertex normal 3
+    pub uv1: super::math::Vec2,
+    pub uv2: super::math::Vec2,
+    pub uv3: super::math::Vec2,
+    pub normal: Vec3, // Face normal (camera space)
+    pub face_idx: usize,
+}
+
+/// Calculate shading intensity for a normal
+fn shade_intensity(normal: Vec3, light_dir: Vec3, ambient: f32) -> f32 {
+    let diffuse = normal.dot(light_dir).max(0.0);
+    (ambient + (1.0 - ambient) * diffuse).clamp(0.0, 1.0)
+}
+
+/// Rasterize a single triangle
+fn rasterize_triangle(
+    fb: &mut Framebuffer,
+    surface: &Surface,
+    texture: Option<&Texture>,
+    settings: &RasterSettings,
+) {
+    // Bounding box
+    let min_x = surface.v1.x.min(surface.v2.x).min(surface.v3.x).max(0.0) as usize;
+    let max_x = (surface.v1.x.max(surface.v2.x).max(surface.v3.x) + 1.0).min(fb.width as f32) as usize;
+    let min_y = surface.v1.y.min(surface.v2.y).min(surface.v3.y).max(0.0) as usize;
+    let max_y = (surface.v1.y.max(surface.v2.y).max(surface.v3.y) + 1.0).min(fb.height as f32) as usize;
+
+    // Pre-calculate flat shading if needed
+    let flat_shade = if settings.shading == ShadingMode::Flat {
+        shade_intensity(surface.normal, settings.light_dir, settings.ambient)
+    } else {
+        1.0
+    };
+
+    // Rasterize
+    for y in min_y..max_y {
+        for x in min_x..max_x {
+            let p = Vec3::new(x as f32, y as f32, 0.0);
+            let bc = barycentric(p, surface.v1, surface.v2, surface.v3);
+
+            // Check if inside triangle
+            const ERR: f32 = -0.0001;
+            if bc.x >= ERR && bc.y >= ERR && bc.z >= ERR {
+                // Interpolate depth
+                let z = bc.x * surface.v1.z + bc.y * surface.v2.z + bc.z * surface.v3.z;
+
+                // Z-buffer test
+                if settings.use_zbuffer {
+                    let idx = y * fb.width + x;
+                    if z >= fb.zbuffer[idx] {
+                        continue;
+                    }
+                }
+
+                // Interpolate UV coordinates
+                let (u, v) = if settings.affine_textures {
+                    // Affine (PS1 style) - linear interpolation
+                    let u = bc.x * surface.uv1.x + bc.y * surface.uv2.x + bc.z * surface.uv3.x;
+                    let v = bc.x * surface.uv1.y + bc.y * surface.uv2.y + bc.z * surface.uv3.y;
+                    (u, v)
+                } else {
+                    // Perspective-correct interpolation
+                    let mut bcc = bc;
+                    bcc.x = bc.x / surface.v1.z;
+                    bcc.y = bc.y / surface.v2.z;
+                    bcc.z = bc.z / surface.v3.z;
+                    let bd = bcc.x + bcc.y + bcc.z;
+                    bcc.x /= bd;
+                    bcc.y /= bd;
+                    bcc.z /= bd;
+
+                    let u = bcc.x * surface.uv1.x + bcc.y * surface.uv2.x + bcc.z * surface.uv3.x;
+                    let v = bcc.x * surface.uv1.y + bcc.y * surface.uv2.y + bcc.z * surface.uv3.y;
+                    (u, v)
+                };
+
+                // Sample texture or use white
+                let mut color = if let Some(tex) = texture {
+                    tex.sample(u, 1.0 - v)
+                } else {
+                    Color::WHITE
+                };
+
+                // Apply shading
+                let shade = match settings.shading {
+                    ShadingMode::None => 1.0,
+                    ShadingMode::Flat => flat_shade,
+                    ShadingMode::Gouraud => {
+                        // Interpolate per-vertex shading
+                        let s1 = shade_intensity(surface.vn1, settings.light_dir, settings.ambient);
+                        let s2 = shade_intensity(surface.vn2, settings.light_dir, settings.ambient);
+                        let s3 = shade_intensity(surface.vn3, settings.light_dir, settings.ambient);
+                        bc.x * s1 + bc.y * s2 + bc.z * s3
+                    }
+                };
+
+                color = color.shade(shade);
+
+                // Write pixel
+                fb.set_pixel_with_depth(x, y, z, color);
+            }
+        }
+    }
+}
+
+/// Render a mesh to the framebuffer
+pub fn render_mesh(
+    fb: &mut Framebuffer,
+    vertices: &[Vertex],
+    faces: &[Face],
+    textures: &[Texture],
+    camera: &Camera,
+    settings: &RasterSettings,
+) {
+    // Transform and project all vertices
+    let mut projected: Vec<Vec3> = Vec::with_capacity(vertices.len());
+    let mut cam_space_normals: Vec<Vec3> = Vec::with_capacity(vertices.len());
+
+    for v in vertices {
+        // Transform position to camera space
+        let rel_pos = v.pos - camera.position;
+        let cam_pos = perspective_transform(rel_pos, camera.basis_x, camera.basis_y, camera.basis_z);
+
+        // Project to screen
+        let screen_pos = project(cam_pos, settings.vertex_snap, fb.width, fb.height);
+        projected.push(screen_pos);
+
+        // Transform normal to camera space
+        let cam_normal = perspective_transform(v.normal, camera.basis_x, camera.basis_y, camera.basis_z);
+        cam_space_normals.push(cam_normal.normalize());
+    }
+
+    // Build surfaces for visible faces
+    let mut surfaces: Vec<Surface> = Vec::with_capacity(faces.len());
+
+    for (face_idx, face) in faces.iter().enumerate() {
+        let v1 = projected[face.v0];
+        let v2 = projected[face.v1];
+        let v3 = projected[face.v2];
+
+        // Calculate face normal
+        let edge1 = v2 - v1;
+        let edge2 = v3 - v1;
+        let normal = edge1.cross(edge2).normalize();
+
+        // Backface culling
+        if settings.backface_cull {
+            let forward = Vec3::new(0.0, 0.0, -1.0);
+            if normal.dot(forward) <= 0.0 {
+                continue;
+            }
+        }
+
+        // Near plane clipping (skip triangles behind camera)
+        if v1.z <= 0.1 || v2.z <= 0.1 || v3.z <= 0.1 {
+            continue;
+        }
+
+        surfaces.push(Surface {
+            v1,
+            v2,
+            v3,
+            vn1: cam_space_normals[face.v0],
+            vn2: cam_space_normals[face.v1],
+            vn3: cam_space_normals[face.v2],
+            uv1: vertices[face.v0].uv,
+            uv2: vertices[face.v1].uv,
+            uv3: vertices[face.v2].uv,
+            normal,
+            face_idx,
+        });
+    }
+
+    // Sort by depth if not using Z-buffer (painter's algorithm)
+    if !settings.use_zbuffer {
+        surfaces.sort_by(|a, b| {
+            let a_max_z = a.v1.z.max(a.v2.z).max(a.v3.z);
+            let b_max_z = b.v1.z.max(b.v2.z).max(b.v3.z);
+            b_max_z.partial_cmp(&a_max_z).unwrap()
+        });
+    }
+
+    // Rasterize each surface
+    for surface in &surfaces {
+        let texture = faces[surface.face_idx]
+            .texture_id
+            .and_then(|id| textures.get(id));
+        rasterize_triangle(fb, surface, texture, settings);
+    }
+}
+
+/// Create a simple test cube mesh
+pub fn create_test_cube() -> (Vec<Vertex>, Vec<Face>) {
+    use super::math::Vec2;
+
+    let mut vertices = Vec::new();
+    let mut faces = Vec::new();
+
+    // Cube vertices with positions, UVs, and normals
+    let positions = [
+        // Front face
+        Vec3::new(-1.0, -1.0, 1.0),
+        Vec3::new(1.0, -1.0, 1.0),
+        Vec3::new(1.0, 1.0, 1.0),
+        Vec3::new(-1.0, 1.0, 1.0),
+        // Back face
+        Vec3::new(-1.0, -1.0, -1.0),
+        Vec3::new(-1.0, 1.0, -1.0),
+        Vec3::new(1.0, 1.0, -1.0),
+        Vec3::new(1.0, -1.0, -1.0),
+        // Top face
+        Vec3::new(-1.0, 1.0, -1.0),
+        Vec3::new(-1.0, 1.0, 1.0),
+        Vec3::new(1.0, 1.0, 1.0),
+        Vec3::new(1.0, 1.0, -1.0),
+        // Bottom face
+        Vec3::new(-1.0, -1.0, -1.0),
+        Vec3::new(1.0, -1.0, -1.0),
+        Vec3::new(1.0, -1.0, 1.0),
+        Vec3::new(-1.0, -1.0, 1.0),
+        // Right face
+        Vec3::new(1.0, -1.0, -1.0),
+        Vec3::new(1.0, 1.0, -1.0),
+        Vec3::new(1.0, 1.0, 1.0),
+        Vec3::new(1.0, -1.0, 1.0),
+        // Left face
+        Vec3::new(-1.0, -1.0, -1.0),
+        Vec3::new(-1.0, -1.0, 1.0),
+        Vec3::new(-1.0, 1.0, 1.0),
+        Vec3::new(-1.0, 1.0, -1.0),
+    ];
+
+    let normals = [
+        Vec3::new(0.0, 0.0, 1.0),  // Front
+        Vec3::new(0.0, 0.0, -1.0), // Back
+        Vec3::new(0.0, 1.0, 0.0),  // Top
+        Vec3::new(0.0, -1.0, 0.0), // Bottom
+        Vec3::new(1.0, 0.0, 0.0),  // Right
+        Vec3::new(-1.0, 0.0, 0.0), // Left
+    ];
+
+    let uvs = [
+        Vec2::new(0.0, 0.0),
+        Vec2::new(1.0, 0.0),
+        Vec2::new(1.0, 1.0),
+        Vec2::new(0.0, 1.0),
+    ];
+
+    // Build vertices for each face
+    for face_idx in 0..6 {
+        let base = face_idx * 4;
+        let normal = normals[face_idx];
+
+        for i in 0..4 {
+            vertices.push(Vertex {
+                pos: positions[base + i],
+                uv: uvs[i],
+                normal,
+            });
+        }
+
+        // Two triangles per face
+        let vbase = face_idx * 4;
+        faces.push(Face::with_texture(vbase, vbase + 1, vbase + 2, 0));
+        faces.push(Face::with_texture(vbase, vbase + 2, vbase + 3, 0));
+    }
+
+    (vertices, faces)
+}
