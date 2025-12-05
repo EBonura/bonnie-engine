@@ -415,30 +415,32 @@ pub fn draw_viewport_3d(
             else if state.tool == EditorTool::DrawFloor || state.tool == EditorTool::DrawCeiling {
                 // Cast ray from camera through mouse click to find where to place floor/ceiling
                 if let Some((mouse_fb_x, mouse_fb_y)) = screen_to_fb(mouse_pos.0, mouse_pos.1) {
-                    // Get camera basis vectors
+                    // Get camera parameters
                     let camera_pos = state.camera_3d.position;
                     let basis_x = state.camera_3d.basis_x;
                     let basis_y = state.camera_3d.basis_y;
                     let basis_z = state.camera_3d.basis_z;
 
-                    // Convert mouse position to normalized screen coordinates (-1 to 1)
-                    let fb_width = fb.width as f32;
-                    let fb_height = fb.height as f32;
-                    let norm_x = (mouse_fb_x / fb_width) * 2.0 - 1.0;
-                    let norm_y = (mouse_fb_y / fb_height) * 2.0 - 1.0;
-
-                    // Construct ray direction (reverse of projection)
+                    // Use same projection constants as world_to_screen
                     const SCALE: f32 = 0.75;
                     let vs = (fb.width.min(fb.height) as f32 / 2.0) * SCALE;
                     let ud = 5.0;
                     let us = ud - 1.0;
 
-                    // Ray direction in camera space
-                    let ray_cam_x = norm_x * (fb_width / 2.0) / vs * us;
-                    let ray_cam_y = norm_y * (fb_height / 2.0) / vs * us;
-                    let ray_cam_z = us;
+                    // Convert framebuffer coords to normalized coords relative to center
+                    let norm_x = (mouse_fb_x - fb.width as f32 / 2.0) / vs;
+                    let norm_y = (mouse_fb_y - fb.height as f32 / 2.0) / vs;
 
-                    // Transform ray to world space
+                    // Build ray in camera space
+                    // The projection is: sx = (cam_x * us / (cam_z + ud)) * vs + center
+                    // Inverting: (sx - center) / vs = (cam_x * us) / (cam_z + ud)
+                    // We want a direction, so we can set cam_z = us (depth = 1 in view space)
+                    let denom = us + ud;
+                    let ray_cam_x = norm_x * denom / us;
+                    let ray_cam_y = norm_y * denom / us;
+                    let ray_cam_z = 1.0; // Forward
+
+                    // Transform ray from camera space to world space
                     let ray_dir = Vec3::new(
                         ray_cam_x * basis_x.x + ray_cam_y * basis_y.x + ray_cam_z * basis_z.x,
                         ray_cam_x * basis_x.y + ray_cam_y * basis_y.y + ray_cam_z * basis_z.y,
@@ -453,15 +455,10 @@ pub fn draw_viewport_3d(
                     };
 
                     // Intersect ray with horizontal plane at target_y
-                    // Plane equation: y = target_y
-                    // Ray: P = camera_pos + t * ray_dir
-                    // At intersection: camera_pos.y + t * ray_dir.y = target_y
-                    // Solve for t: t = (target_y - camera_pos.y) / ray_dir.y
-
-                    if ray_dir.y.abs() > 0.001 { // Check ray isn't parallel to plane
+                    if ray_dir.y.abs() > 0.001 {
                         let t = (target_y - camera_pos.y) / ray_dir.y;
 
-                        if t > 0.0 { // Ray points toward plane (not behind camera)
+                        if t > 0.0 {
                             let intersection = Vec3::new(
                                 camera_pos.x + t * ray_dir.x,
                                 target_y,
