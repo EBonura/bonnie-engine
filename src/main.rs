@@ -201,7 +201,8 @@ async fn main() {
                 last_mouse_pos = mouse_pos;
 
                 // Camera movement (WASD + Q/E for vertical)
-                let move_speed = 0.05;
+                // Scale movement speed for TRLE units (1024 per sector)
+                let move_speed = 50.0; // Was 0.05, now scaled for TRLE geometry
                 if is_key_down(KeyCode::W) {
                     camera.position = camera.position + camera.basis_z * move_speed;
                 }
