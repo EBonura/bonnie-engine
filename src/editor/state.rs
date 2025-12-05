@@ -139,7 +139,7 @@ pub struct EditorState {
     pub grid_drag_started: bool, // True if we've started dragging (for undo)
 
     /// 3D viewport vertex dragging state
-    pub viewport_dragging_vertex: Option<(usize, usize)>, // (room_idx, vertex_idx)
+    pub viewport_dragging_vertices: Vec<(usize, usize)>, // List of (room_idx, vertex_idx)
     pub viewport_drag_started: bool,
     pub viewport_drag_plane_y: f32, // Y height of the drag plane
 
@@ -190,7 +190,7 @@ impl EditorState {
             grid_panning: false,
             grid_dragging_vertex: None,
             grid_drag_started: false,
-            viewport_dragging_vertex: None,
+            viewport_dragging_vertices: Vec::new(),
             viewport_drag_started: false,
             viewport_drag_plane_y: 0.0,
             texture_packs,

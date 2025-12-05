@@ -132,7 +132,7 @@ pub fn draw_viewport_3d(
 
     // Camera rotation with right mouse button (same as game mode)
     // Only rotate camera when not dragging a vertex
-    if ctx.mouse.right_down && inside_viewport && state.viewport_dragging_vertex.is_none() {
+    if ctx.mouse.right_down && inside_viewport && state.viewport_dragging_vertices.is_empty() {
         if state.viewport_mouse_captured {
             // Inverted to match Y-down coordinate system
             let dx = (mouse_pos.1 - state.viewport_last_mouse.1) * 0.005;
@@ -146,7 +146,7 @@ pub fn draw_viewport_3d(
 
     // Keyboard camera movement (WASD + Q/E) - only when viewport focused and not dragging
     let move_speed = 100.0; // Scaled for TRLE units (1024 per sector)
-    if (inside_viewport || state.viewport_mouse_captured) && state.viewport_dragging_vertex.is_none() {
+    if (inside_viewport || state.viewport_mouse_captured) && state.viewport_dragging_vertices.is_empty() {
         if is_key_down(KeyCode::W) {
             state.camera_3d.position = state.camera_3d.position + state.camera_3d.basis_z * move_speed;
         }
@@ -286,7 +286,7 @@ pub fn draw_viewport_3d(
             if let Some((room_idx, vert_idx, _)) = hovered_vertex {
                 // Select and start dragging this vertex
                 state.selection = Selection::Vertex { room: room_idx, vertex: vert_idx };
-                state.viewport_dragging_vertex = Some((room_idx, vert_idx));
+                state.viewport_dragging_vertices = vec![(room_idx, vert_idx)];
                 state.viewport_drag_started = false;
 
                 // Store the initial Y height (unsnapped) for accumulating deltas
@@ -296,17 +296,44 @@ pub fn draw_viewport_3d(
                     }
                 }
             } else if let Some((room_idx, v0, v1, _)) = hovered_edge {
-                // Select edge
+                // Select edge and start dragging both vertices
                 state.selection = Selection::Edge { room: room_idx, v0, v1 };
+                state.viewport_dragging_vertices = vec![(room_idx, v0), (room_idx, v1)];
+                state.viewport_drag_started = false;
+
+                // Store the average Y height of the edge
+                if let Some(room) = state.level.rooms.get(room_idx) {
+                    if let (Some(v0_pos), Some(v1_pos)) = (room.vertices.get(v0), room.vertices.get(v1)) {
+                        state.viewport_drag_plane_y = (v0_pos.y + v1_pos.y) / 2.0;
+                    }
+                }
             } else if let Some((room_idx, face_idx)) = hovered_face {
-                // Select face
+                // Select face and start dragging all vertices
                 state.selection = Selection::Face { room: room_idx, face: face_idx };
+
+                if let Some(room) = state.level.rooms.get(room_idx) {
+                    if let Some(face) = room.faces.get(face_idx) {
+                        // Collect all face vertices
+                        let num_verts = if face.is_triangle { 3 } else { 4 };
+                        state.viewport_dragging_vertices = (0..num_verts)
+                            .map(|i| (room_idx, face.indices[i]))
+                            .collect();
+
+                        // Store the average Y height of the face
+                        let avg_y: f32 = (0..num_verts)
+                            .filter_map(|i| room.vertices.get(face.indices[i]))
+                            .map(|v| v.y)
+                            .sum::<f32>() / num_verts as f32;
+                        state.viewport_drag_plane_y = avg_y;
+                        state.viewport_drag_started = false;
+                    }
+                }
             }
         }
 
         // Continue dragging (Y-axis only in 3D view - TRLE constraint)
         if ctx.mouse.left_down {
-            if let Some((room_idx, vert_idx)) = state.viewport_dragging_vertex {
+            if !state.viewport_dragging_vertices.is_empty() {
                 // In 3D view, vertices can ONLY move vertically (Y-axis)
                 // X/Z positions are locked to sector grid and edited in 2D view only
 
@@ -323,11 +350,15 @@ pub fn draw_viewport_3d(
                 // Accumulate delta into the unsnapped drag plane Y
                 state.viewport_drag_plane_y += y_delta;
 
-                // Update vertex Y position with snapping during drag
-                if let Some(room) = state.level.rooms.get_mut(room_idx) {
-                    if let Some(v) = room.vertices.get_mut(vert_idx) {
-                        // Snap to CLICK_HEIGHT grid while dragging
-                        v.y = (state.viewport_drag_plane_y / CLICK_HEIGHT).round() * CLICK_HEIGHT;
+                // Update all dragged vertices' Y positions with snapping during drag
+                let snapped_y = (state.viewport_drag_plane_y / CLICK_HEIGHT).round() * CLICK_HEIGHT;
+
+                for &(room_idx, vert_idx) in &state.viewport_dragging_vertices {
+                    if let Some(room) = state.level.rooms.get_mut(room_idx) {
+                        if let Some(v) = room.vertices.get_mut(vert_idx) {
+                            // Snap to CLICK_HEIGHT grid while dragging
+                            v.y = snapped_y;
+                        }
                     }
                 }
             }
@@ -335,8 +366,8 @@ pub fn draw_viewport_3d(
 
         // End dragging on release
         if ctx.mouse.left_released {
-            // Snap the final position to CLICK_HEIGHT grid
-            if let Some((room_idx, vert_idx)) = state.viewport_dragging_vertex {
+            // Snap the final position to CLICK_HEIGHT grid for all vertices
+            for &(room_idx, vert_idx) in &state.viewport_dragging_vertices {
                 if let Some(room) = state.level.rooms.get_mut(room_idx) {
                     if let Some(v) = room.vertices.get_mut(vert_idx) {
                         v.y = (v.y / CLICK_HEIGHT).round() * CLICK_HEIGHT;
@@ -344,7 +375,7 @@ pub fn draw_viewport_3d(
                 }
             }
 
-            state.viewport_dragging_vertex = None;
+            state.viewport_dragging_vertices.clear();
             state.viewport_drag_started = false;
         }
     }
@@ -453,7 +484,7 @@ pub fn draw_viewport_3d(
             ) {
                 let is_selected = matches!(state.selection, Selection::Vertex { room: r, vertex: v } if r == room_idx && v == vert_idx);
                 let is_hovered = hovered_vertex.map_or(false, |(ri, vi, _)| ri == room_idx && vi == vert_idx);
-                let is_dragging = state.viewport_dragging_vertex == Some((room_idx, vert_idx));
+                let is_dragging = state.viewport_dragging_vertices.contains(&(room_idx, vert_idx));
 
                 vertex_overlays.push((fb_sx, fb_sy, is_selected || is_dragging, is_hovered));
             }
