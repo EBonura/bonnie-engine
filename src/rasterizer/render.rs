@@ -90,12 +90,12 @@ impl Camera {
     }
 
     pub fn update_basis(&mut self) {
-        let upward = Vec3::UP;
+        let upward = Vec3::new(0.0, -1.0, 0.0);  // Use -Y as up to match screen coordinates
 
         // Forward vector based on rotation
         self.basis_z = Vec3 {
             x: self.rotation_x.cos() * self.rotation_y.sin(),
-            y: -self.rotation_x.sin(),
+            y: -self.rotation_x.sin(),  // Back to original with negation
             z: self.rotation_x.cos() * self.rotation_y.cos(),
         };
 
@@ -245,12 +245,14 @@ pub fn render_mesh(
 ) {
     // Transform and project all vertices
     let mut projected: Vec<Vec3> = Vec::with_capacity(vertices.len());
+    let mut cam_space_positions: Vec<Vec3> = Vec::with_capacity(vertices.len());
     let mut cam_space_normals: Vec<Vec3> = Vec::with_capacity(vertices.len());
 
     for v in vertices {
         // Transform position to camera space
         let rel_pos = v.pos - camera.position;
         let cam_pos = perspective_transform(rel_pos, camera.basis_x, camera.basis_y, camera.basis_z);
+        cam_space_positions.push(cam_pos);
 
         // Project to screen
         let screen_pos = project(cam_pos, settings.vertex_snap, fb.width, fb.height);
@@ -269,22 +271,30 @@ pub fn render_mesh(
         let v2 = projected[face.v1];
         let v3 = projected[face.v2];
 
-        // Calculate face normal
-        let edge1 = v2 - v1;
-        let edge2 = v3 - v1;
-        let normal = edge1.cross(edge2).normalize();
-
-        // Backface culling
-        if settings.backface_cull {
-            let forward = Vec3::new(0.0, 0.0, -1.0);
-            if normal.dot(forward) <= 0.0 {
-                continue;
-            }
-        }
+        // Calculate face normal in camera space (before projection)
+        let cv1 = cam_space_positions[face.v0];
+        let cv2 = cam_space_positions[face.v1];
+        let cv3 = cam_space_positions[face.v2];
 
         // Near plane clipping (skip triangles behind camera)
-        if v1.z <= 0.1 || v2.z <= 0.1 || v3.z <= 0.1 {
+        // In our coordinate system, +Z is forward, so we check if vertices are in front of camera
+        if cv1.z <= 0.1 || cv2.z <= 0.1 || cv3.z <= 0.1 {
             continue;
+        }
+
+        let edge1 = cv2 - cv1;
+        let edge2 = cv3 - cv1;
+        let normal = edge1.cross(edge2).normalize();
+
+        // Backface culling - check if face points toward camera
+        // In our coordinate system, +Z is forward (camera looks down +Z axis)
+        // We want to render faces whose normals point back toward the camera (negative Z)
+        if settings.backface_cull {
+            // Check if normal points away from camera (positive Z component)
+            // If normal.z > 0, the face is pointing away, so cull it
+            if normal.z > 0.0 {
+                continue;
+            }
         }
 
         surfaces.push(Surface {

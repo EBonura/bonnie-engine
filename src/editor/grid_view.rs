@@ -31,7 +31,8 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
         if ctx.mouse.scroll != 0.0 {
             let zoom_factor = 1.0 + ctx.mouse.scroll * 0.02;
             // Adjusted zoom limits for TRLE scale (1024-unit sectors)
-            state.grid_zoom = (state.grid_zoom * zoom_factor).clamp(0.05, 2.0);
+            // Allow more zoom out to see multiple sectors at once
+            state.grid_zoom = (state.grid_zoom * zoom_factor).clamp(0.01, 2.0);
         }
 
         // Pan with right mouse button

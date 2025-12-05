@@ -111,8 +111,9 @@ pub fn draw_viewport_3d(
     // Only rotate camera when not dragging a vertex
     if ctx.mouse.right_down && inside_viewport && state.viewport_dragging_vertex.is_none() {
         if state.viewport_mouse_captured {
-            let dx = -(mouse_pos.1 - state.viewport_last_mouse.1) * 0.005;
-            let dy = (mouse_pos.0 - state.viewport_last_mouse.0) * 0.005;
+            // Inverted to match Y-down coordinate system
+            let dx = (mouse_pos.1 - state.viewport_last_mouse.1) * 0.005;
+            let dy = -(mouse_pos.0 - state.viewport_last_mouse.0) * 0.005;
             state.camera_3d.rotate(dx, dy);
         }
         state.viewport_mouse_captured = true;

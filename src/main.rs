@@ -189,9 +189,9 @@ async fn main() {
                 // Camera rotation with right mouse button
                 if is_mouse_button_down(MouseButton::Right) {
                     if mouse_captured {
-                        // Note: negated dx for non-inverted vertical look
-                        let dx = -(mouse_pos.1 - last_mouse_pos.1) * 0.005;
-                        let dy = (mouse_pos.0 - last_mouse_pos.0) * 0.005;
+                        // Inverted to match Y-down coordinate system
+                        let dx = (mouse_pos.1 - last_mouse_pos.1) * 0.005;
+                        let dy = -(mouse_pos.0 - last_mouse_pos.0) * 0.005;
                         camera.rotate(dx, dy);
                     }
                     mouse_captured = true;
