@@ -343,6 +343,7 @@ async fn main() {
                             }
                         }
                     }
+                    #[cfg(not(target_arch = "wasm32"))]
                     EditorAction::SaveAs => {
                         // Show native save dialog (blocking on macOS)
                         let default_dir = PathBuf::from("assets/levels");
@@ -370,6 +371,11 @@ async fn main() {
                             editor_state.set_status("Save cancelled", 2.0);
                         }
                     }
+                    #[cfg(target_arch = "wasm32")]
+                    EditorAction::SaveAs => {
+                        editor_state.set_status("Save As not available in browser", 3.0);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
                     EditorAction::PromptLoad => {
                         // Show native open dialog (blocking on macOS)
                         let default_dir = PathBuf::from("assets/levels");
@@ -394,6 +400,10 @@ async fn main() {
                         } else {
                             editor_state.set_status("Open cancelled", 2.0);
                         }
+                    }
+                    #[cfg(target_arch = "wasm32")]
+                    EditorAction::PromptLoad => {
+                        editor_state.set_status("Open not available in browser", 3.0);
                     }
                     EditorAction::Load(path_str) => {
                         let path = PathBuf::from(&path_str);
