@@ -351,9 +351,9 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                         let wx = (mouse_pos.0 - center_x) / scale;
                         let wz = -(mouse_pos.1 - center_y) / scale;
 
-                        // Snap to TRLE sector grid
-                        let snapped_x = (wx / SECTOR_SIZE).round() * SECTOR_SIZE;
-                        let snapped_z = (wz / SECTOR_SIZE).round() * SECTOR_SIZE;
+                        // Snap to TRLE sector grid - use floor to place corner at grid intersection
+                        let snapped_x = (wx / SECTOR_SIZE).floor() * SECTOR_SIZE;
+                        let snapped_z = (wz / SECTOR_SIZE).floor() * SECTOR_SIZE;
 
                         // Create a new floor quad (1 sector = 1024x1024)
                         state.save_undo();
@@ -381,9 +381,9 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                         let wx = (mouse_pos.0 - center_x) / scale;
                         let wz = -(mouse_pos.1 - center_y) / scale;
 
-                        // Snap to TRLE sector grid
-                        let snapped_x = (wx / SECTOR_SIZE).round() * SECTOR_SIZE;
-                        let snapped_z = (wz / SECTOR_SIZE).round() * SECTOR_SIZE;
+                        // Snap to TRLE sector grid - use floor to place corner at grid intersection
+                        let snapped_x = (wx / SECTOR_SIZE).floor() * SECTOR_SIZE;
+                        let snapped_z = (wz / SECTOR_SIZE).floor() * SECTOR_SIZE;
 
                         // Create a new ceiling quad at standard height (4 clicks = 1024 units)
                         state.save_undo();
