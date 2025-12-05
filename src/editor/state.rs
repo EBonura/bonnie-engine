@@ -145,7 +145,8 @@ pub struct EditorState {
     /// 2D grid view mouse state
     pub grid_last_mouse: (f32, f32),
     pub grid_panning: bool,
-    pub grid_dragging_vertex: Option<usize>,
+    pub grid_dragging_vertex: Option<usize>, // Primary dragged vertex (for backward compat)
+    pub grid_dragging_vertices: Vec<usize>,   // All vertices being dragged (for linking)
     pub grid_drag_started: bool, // True if we've started dragging (for undo)
 
     /// 3D viewport vertex dragging state
@@ -204,6 +205,7 @@ impl EditorState {
             grid_last_mouse: (0.0, 0.0),
             grid_panning: false,
             grid_dragging_vertex: None,
+            grid_dragging_vertices: Vec::new(),
             grid_drag_started: false,
             viewport_dragging_vertices: Vec::new(),
             viewport_drag_started: false,

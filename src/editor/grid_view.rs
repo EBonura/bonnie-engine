@@ -351,6 +351,27 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                             state.clear_multi_selection();
                         }
                         state.grid_dragging_vertex = Some(vi);
+
+                        // Find all vertices to drag based on link mode
+                        if let Some(clicked_vert) = room.vertices.get(vi) {
+                            if state.link_coincident_vertices {
+                                // Find ALL vertices at the same position (coincident vertices)
+                                const EPSILON: f32 = 0.001;
+                                state.grid_dragging_vertices = room.vertices.iter()
+                                    .enumerate()
+                                    .filter(|(_, v)| {
+                                        (v.x - clicked_vert.x).abs() < EPSILON &&
+                                        (v.y - clicked_vert.y).abs() < EPSILON &&
+                                        (v.z - clicked_vert.z).abs() < EPSILON
+                                    })
+                                    .map(|(idx, _)| idx)
+                                    .collect();
+                            } else {
+                                // Independent mode - only drag the clicked vertex
+                                state.grid_dragging_vertices = vec![vi];
+                            }
+                        }
+
                         state.grid_drag_started = false;
                     } else if let Some(fi) = hovered_face {
                         // Face clicked - select it
@@ -517,7 +538,7 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                 state.selection_rect_end = Some(mouse_pos);
             }
 
-            if let Some(vi) = state.grid_dragging_vertex {
+            if state.grid_dragging_vertex.is_some() {
                 // Save undo state on first actual movement
                 if !state.grid_drag_started {
                     let dx = mouse_pos.0 - state.grid_last_mouse.0;
@@ -536,11 +557,13 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                 let snapped_x = (wx / SECTOR_SIZE).round() * SECTOR_SIZE;
                 let snapped_z = (wz / SECTOR_SIZE).round() * SECTOR_SIZE;
 
-                // Update vertex position
+                // Update ALL linked vertices
                 if let Some(room) = state.level.rooms.get_mut(current_room_idx) {
-                    if let Some(v) = room.vertices.get_mut(vi) {
-                        v.x = snapped_x;
-                        v.z = snapped_z;
+                    for &vi in &state.grid_dragging_vertices {
+                        if let Some(v) = room.vertices.get_mut(vi) {
+                            v.x = snapped_x;
+                            v.z = snapped_z;
+                        }
                     }
                 }
             }
@@ -603,6 +626,7 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
             state.selection_rect_start = None;
             state.selection_rect_end = None;
             state.grid_dragging_vertex = None;
+            state.grid_dragging_vertices.clear();
             state.grid_drag_started = false;
         }
     } else {
@@ -611,6 +635,7 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
             state.selection_rect_start = None;
             state.selection_rect_end = None;
             state.grid_dragging_vertex = None;
+            state.grid_dragging_vertices.clear();
             state.grid_drag_started = false;
         }
     }

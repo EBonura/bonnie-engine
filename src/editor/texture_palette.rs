@@ -182,8 +182,21 @@ pub fn draw_texture_palette(
     if let Some(tex_ref) = clicked_texture {
         state.selected_texture = tex_ref.clone();
 
-        // If a face is selected, apply the texture to it immediately
-        if let super::Selection::Face { room, face } = state.selection {
+        // If we have multi-selected faces, apply texture to all of them
+        if !state.multi_selection.is_empty() {
+            state.save_undo();
+            for selection in &state.multi_selection {
+                if let super::Selection::Face { room, face } = selection {
+                    if let Some(r) = state.level.rooms.get_mut(*room) {
+                        if let Some(f) = r.faces.get_mut(*face) {
+                            f.texture = tex_ref.clone();
+                        }
+                    }
+                }
+            }
+        }
+        // Otherwise, if a single face is selected, apply the texture to it
+        else if let super::Selection::Face { room, face } = state.selection {
             state.save_undo();
             if let Some(r) = state.level.rooms.get_mut(room) {
                 if let Some(f) = r.faces.get_mut(face) {

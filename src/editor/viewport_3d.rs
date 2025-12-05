@@ -365,16 +365,56 @@ pub fn draw_viewport_3d(
                     }
                 }
             } else if let Some((room_idx, v0, v1, _)) = hovered_edge {
-                // Select edge and start dragging both vertices
+                // Select edge and start dragging vertices
                 state.selection = Selection::Edge { room: room_idx, v0, v1 };
-                state.viewport_dragging_vertices = vec![(room_idx, v0), (room_idx, v1)];
-                state.viewport_drag_started = false;
 
-                // Store initial Y positions of both vertices
+                // Find all vertices to drag based on link mode
                 if let Some(room) = state.level.rooms.get(room_idx) {
                     if let (Some(v0_pos), Some(v1_pos)) = (room.vertices.get(v0), room.vertices.get(v1)) {
+                        if state.link_coincident_vertices {
+                            // Find ALL edges that share the same two vertex positions (coincident edges)
+                            const EPSILON: f32 = 0.001;
+
+                            // Collect all vertices at the same positions as v0 and v1
+                            let vertices_at_v0: Vec<usize> = room.vertices.iter()
+                                .enumerate()
+                                .filter(|(_, v)| {
+                                    (v.x - v0_pos.x).abs() < EPSILON &&
+                                    (v.y - v0_pos.y).abs() < EPSILON &&
+                                    (v.z - v0_pos.z).abs() < EPSILON
+                                })
+                                .map(|(idx, _)| idx)
+                                .collect();
+
+                            let vertices_at_v1: Vec<usize> = room.vertices.iter()
+                                .enumerate()
+                                .filter(|(_, v)| {
+                                    (v.x - v1_pos.x).abs() < EPSILON &&
+                                    (v.y - v1_pos.y).abs() < EPSILON &&
+                                    (v.z - v1_pos.z).abs() < EPSILON
+                                })
+                                .map(|(idx, _)| idx)
+                                .collect();
+
+                            // Drag all vertices from both endpoints
+                            state.viewport_dragging_vertices = vertices_at_v0.iter()
+                                .chain(vertices_at_v1.iter())
+                                .map(|&idx| (room_idx, idx))
+                                .collect();
+
+                            // Store initial Y positions
+                            state.viewport_drag_initial_y = state.viewport_dragging_vertices.iter()
+                                .filter_map(|&(_, idx)| room.vertices.get(idx))
+                                .map(|v| v.y)
+                                .collect();
+                        } else {
+                            // Independent mode - only drag the clicked edge's vertices
+                            state.viewport_dragging_vertices = vec![(room_idx, v0), (room_idx, v1)];
+                            state.viewport_drag_initial_y = vec![v0_pos.y, v1_pos.y];
+                        }
+
                         state.viewport_drag_plane_y = (v0_pos.y + v1_pos.y) / 2.0; // Average as reference
-                        state.viewport_drag_initial_y = vec![v0_pos.y, v1_pos.y];
+                        state.viewport_drag_started = false;
                     }
                 }
             } else if let Some((room_idx, face_idx)) = hovered_face {
@@ -391,17 +431,63 @@ pub fn draw_viewport_3d(
                 // Allow dragging for all face types now that we preserve relative heights
                 if let Some(room) = state.level.rooms.get(room_idx) {
                     if let Some(face) = room.faces.get(face_idx) {
-                        // Collect all face vertices
                         let num_verts = if face.is_triangle { 3 } else { 4 };
-                        state.viewport_dragging_vertices = (0..num_verts)
-                            .map(|i| (room_idx, face.indices[i]))
-                            .collect();
 
-                        // Store initial Y positions of all vertices
-                        state.viewport_drag_initial_y = (0..num_verts)
-                            .filter_map(|i| room.vertices.get(face.indices[i]))
-                            .map(|v| v.y)
-                            .collect();
+                        if state.link_coincident_vertices {
+                            // Find ALL vertices at the same positions as this face's vertices
+                            // (same logic as vertex and edge linking - full XYZ match)
+                            const EPSILON: f32 = 0.001;
+
+                            // Get the clicked face's vertex positions
+                            let clicked_positions: Vec<_> = (0..num_verts)
+                                .filter_map(|i| room.vertices.get(face.indices[i]))
+                                .copied()
+                                .collect();
+
+                            // For each position in the clicked face, find ALL vertices at that position
+                            let mut all_vertices = Vec::new();
+
+                            for clicked_pos in &clicked_positions {
+                                // Find all vertices at this exact position (XYZ match)
+                                let coincident_verts: Vec<(usize, usize)> = room.vertices.iter()
+                                    .enumerate()
+                                    .filter(|(_, v)| {
+                                        (v.x - clicked_pos.x).abs() < EPSILON &&
+                                        (v.y - clicked_pos.y).abs() < EPSILON &&
+                                        (v.z - clicked_pos.z).abs() < EPSILON
+                                    })
+                                    .map(|(idx, _)| (room_idx, idx))
+                                    .collect();
+
+                                all_vertices.extend(coincident_verts);
+                            }
+
+                            // Remove duplicates
+                            all_vertices.sort();
+                            all_vertices.dedup();
+
+                            state.viewport_dragging_vertices = all_vertices;
+
+                            // Store initial Y positions
+                            state.viewport_drag_initial_y = state.viewport_dragging_vertices.iter()
+                                .filter_map(|&(_, idx)| room.vertices.get(idx))
+                                .map(|v| v.y)
+                                .collect();
+
+                            println!("Face linking: clicked face has {} verts, found {} total vertices to drag",
+                                     num_verts, state.viewport_dragging_vertices.len());
+                            println!("Initial Y positions: {} values", state.viewport_drag_initial_y.len());
+                        } else {
+                            // Independent mode - only drag the clicked face's vertices
+                            state.viewport_dragging_vertices = (0..num_verts)
+                                .map(|i| (room_idx, face.indices[i]))
+                                .collect();
+
+                            state.viewport_drag_initial_y = (0..num_verts)
+                                .filter_map(|i| room.vertices.get(face.indices[i]))
+                                .map(|v| v.y)
+                                .collect();
+                        }
 
                         // Store average Y as reference point for delta
                         let avg_y: f32 = state.viewport_drag_initial_y.iter().sum::<f32>()
@@ -577,9 +663,17 @@ pub fn draw_viewport_3d(
                             if let Some(v) = room.vertices.get_mut(vert_idx) {
                                 // Apply delta to initial position and snap
                                 let new_y = initial_y + delta_from_initial;
-                                v.y = (new_y / CLICK_HEIGHT).round() * CLICK_HEIGHT;
+                                let snapped_y = (new_y / CLICK_HEIGHT).round() * CLICK_HEIGHT;
+                                v.y = snapped_y;
+                                println!("Updated vertex {} to y={}", vert_idx, snapped_y);
+                            } else {
+                                println!("Failed to get vertex {} in room {}", vert_idx, room_idx);
                             }
+                        } else {
+                            println!("Failed to get room {}", room_idx);
                         }
+                    } else {
+                        println!("Failed to get initial_y for index {}", i);
                     }
                 }
             }
