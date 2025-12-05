@@ -4,6 +4,12 @@ use std::path::PathBuf;
 use crate::world::Level;
 use crate::rasterizer::{Camera, Vec3, Texture};
 
+/// TRLE grid constraints
+/// Sector size in world units (X-Z plane)
+pub const SECTOR_SIZE: f32 = 1024.0;
+/// Height subdivision ("click") in world units (Y axis)
+pub const CLICK_HEIGHT: f32 = 256.0;
+
 /// A texture pack loaded from a folder
 pub struct TexturePack {
     pub name: String,
@@ -165,7 +171,7 @@ impl EditorState {
             grid_offset_x: 0.0,
             grid_offset_y: 0.0,
             grid_zoom: 20.0, // Pixels per world unit
-            grid_size: 1.0,
+            grid_size: SECTOR_SIZE, // TRLE sector size
             show_grid: true,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),

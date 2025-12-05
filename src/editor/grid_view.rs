@@ -2,7 +2,7 @@
 
 use macroquad::prelude::*;
 use crate::ui::{Rect, UiContext};
-use super::{EditorState, Selection};
+use super::{EditorState, Selection, SECTOR_SIZE};
 
 /// Point-in-triangle test using barycentric coordinates
 fn point_in_triangle(px: f32, py: f32, v0: (f32, f32), v1: (f32, f32), v2: (f32, f32)) -> bool {
@@ -357,13 +357,9 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                 let wx = (mouse_pos.0 - center_x) / scale;
                 let wz = (mouse_pos.1 - center_y) / scale;
 
-                // Snap to grid if enabled
-                let (snapped_x, snapped_z) = if state.show_grid {
-                    let snap = state.grid_size;
-                    ((wx / snap).round() * snap, (wz / snap).round() * snap)
-                } else {
-                    (wx, wz)
-                };
+                // Snap to TRLE sector grid (1024 units)
+                let snapped_x = (wx / SECTOR_SIZE).round() * SECTOR_SIZE;
+                let snapped_z = (wz / SECTOR_SIZE).round() * SECTOR_SIZE;
 
                 // Update vertex position
                 if let Some(room) = state.level.rooms.get_mut(current_room_idx) {

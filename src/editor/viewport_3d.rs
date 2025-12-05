@@ -6,7 +6,7 @@ use crate::rasterizer::{
     Framebuffer, Texture as RasterTexture, RasterSettings, render_mesh, Color as RasterColor,
     ray_triangle_intersect, screen_to_ray, Vec3,
 };
-use super::{EditorState, Selection};
+use super::{EditorState, Selection, SECTOR_SIZE, CLICK_HEIGHT};
 
 /// Project a world-space point to framebuffer coordinates
 fn world_to_screen(
@@ -225,13 +225,9 @@ pub fn draw_viewport_3d(
                         let new_x = hit_pos.x - room_pos.x;
                         let new_z = hit_pos.z - room_pos.z;
 
-                        // Snap to grid if enabled
-                        let (snapped_x, snapped_z) = if state.show_grid {
-                            let snap = state.grid_size;
-                            ((new_x / snap).round() * snap, (new_z / snap).round() * snap)
-                        } else {
-                            (new_x, new_z)
-                        };
+                        // Snap to TRLE sector grid (1024 units)
+                        let snapped_x = (new_x / SECTOR_SIZE).round() * SECTOR_SIZE;
+                        let snapped_z = (new_z / SECTOR_SIZE).round() * SECTOR_SIZE;
 
                         // Update vertex position
                         if let Some(room) = state.level.rooms.get_mut(room_idx) {
