@@ -163,10 +163,10 @@ pub fn draw_viewport_3d(
                 state.viewport_dragging_vertex = Some((room_idx, vert_idx));
                 state.viewport_drag_started = false;
 
-                // Store the Y height of the vertex for the drag plane
+                // Store the initial Y height (unsnapped) for accumulating deltas
                 if let Some(room) = state.level.rooms.get(room_idx) {
                     if let Some(vert) = room.vertices.get(vert_idx) {
-                        state.viewport_drag_plane_y = vert.y + room.position.y;
+                        state.viewport_drag_plane_y = vert.y;
                     }
                 }
             }
@@ -188,15 +188,13 @@ pub fn draw_viewport_3d(
                 let y_sensitivity = 5.0; // Increased sensitivity for better feel
                 let y_delta = mouse_delta_y * y_sensitivity;
 
-                // Update vertex Y position only
+                // Accumulate delta into the unsnapped drag plane Y
+                state.viewport_drag_plane_y += y_delta;
+
+                // Update vertex Y position (NO snapping during drag - smooth movement)
                 if let Some(room) = state.level.rooms.get_mut(room_idx) {
                     if let Some(v) = room.vertices.get_mut(vert_idx) {
-                        // Apply delta directly without snapping during drag
-                        // This allows smooth accumulation of small movements
-                        v.y += y_delta;
-
-                        // Snap to CLICK_HEIGHT grid
-                        v.y = (v.y / CLICK_HEIGHT).round() * CLICK_HEIGHT;
+                        v.y = state.viewport_drag_plane_y;
                     }
                 }
             }
@@ -204,6 +202,15 @@ pub fn draw_viewport_3d(
 
         // End dragging on release
         if ctx.mouse.left_released {
+            // Snap the final position to CLICK_HEIGHT grid
+            if let Some((room_idx, vert_idx)) = state.viewport_dragging_vertex {
+                if let Some(room) = state.level.rooms.get_mut(room_idx) {
+                    if let Some(v) = room.vertices.get_mut(vert_idx) {
+                        v.y = (v.y / CLICK_HEIGHT).round() * CLICK_HEIGHT;
+                    }
+                }
+            }
+
             state.viewport_dragging_vertex = None;
             state.viewport_drag_started = false;
         }
