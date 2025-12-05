@@ -308,24 +308,30 @@ pub fn draw_viewport_3d(
                     }
                 }
             } else if let Some((room_idx, face_idx)) = hovered_face {
-                // Select face and start dragging all vertices
+                // Select face
                 state.selection = Selection::Face { room: room_idx, face: face_idx };
 
+                // Only allow dragging for floors and ceilings, not walls
                 if let Some(room) = state.level.rooms.get(room_idx) {
                     if let Some(face) = room.faces.get(face_idx) {
-                        // Collect all face vertices
-                        let num_verts = if face.is_triangle { 3 } else { 4 };
-                        state.viewport_dragging_vertices = (0..num_verts)
-                            .map(|i| (room_idx, face.indices[i]))
-                            .collect();
+                        use crate::world::FaceType;
 
-                        // Store the average Y height of the face
-                        let avg_y: f32 = (0..num_verts)
-                            .filter_map(|i| room.vertices.get(face.indices[i]))
-                            .map(|v| v.y)
-                            .sum::<f32>() / num_verts as f32;
-                        state.viewport_drag_plane_y = avg_y;
-                        state.viewport_drag_started = false;
+                        if face.face_type != FaceType::Wall {
+                            // Collect all face vertices for floors/ceilings
+                            let num_verts = if face.is_triangle { 3 } else { 4 };
+                            state.viewport_dragging_vertices = (0..num_verts)
+                                .map(|i| (room_idx, face.indices[i]))
+                                .collect();
+
+                            // Store the average Y height of the face
+                            let avg_y: f32 = (0..num_verts)
+                                .filter_map(|i| room.vertices.get(face.indices[i]))
+                                .map(|v| v.y)
+                                .sum::<f32>() / num_verts as f32;
+                            state.viewport_drag_plane_y = avg_y;
+                            state.viewport_drag_started = false;
+                        }
+                        // Walls can be selected but not dragged (would collapse them)
                     }
                 }
             }
