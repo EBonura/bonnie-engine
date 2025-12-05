@@ -4,9 +4,63 @@ use macroquad::prelude::*;
 use crate::ui::{Rect, UiContext};
 use crate::rasterizer::{
     Framebuffer, Texture as RasterTexture, RasterSettings, render_mesh, Color as RasterColor,
-    ray_triangle_intersect, screen_to_ray,
+    ray_triangle_intersect, screen_to_ray, Vec3,
 };
 use super::{EditorState, Selection};
+
+/// Project a world-space point to framebuffer coordinates
+fn world_to_screen(
+    world_pos: Vec3,
+    camera_pos: Vec3,
+    basis_x: Vec3,
+    basis_y: Vec3,
+    basis_z: Vec3,
+    fb_width: usize,
+    fb_height: usize,
+) -> Option<(f32, f32)> {
+    let rel = world_pos - camera_pos;
+    let cam_z = rel.dot(basis_z);
+
+    // Behind camera
+    if cam_z <= 0.1 {
+        return None;
+    }
+
+    let cam_x = rel.dot(basis_x);
+    let cam_y = rel.dot(basis_y);
+
+    // Same projection as the rasterizer
+    const SCALE: f32 = 0.75;
+    let vs = (fb_width.min(fb_height) as f32 / 2.0) * SCALE;
+    let ud = 5.0;
+    let us = ud - 1.0;
+
+    let denom = cam_z + ud;
+    let sx = (cam_x * us / denom) * vs + (fb_width as f32 / 2.0);
+    let sy = (cam_y * us / denom) * vs + (fb_height as f32 / 2.0);
+
+    Some((sx, sy))
+}
+
+/// Intersect a ray with a horizontal plane at y = plane_y
+fn ray_plane_intersect(
+    ray_origin: Vec3,
+    ray_dir: Vec3,
+    plane_y: f32,
+) -> Option<Vec3> {
+    // Plane normal is (0, 1, 0)
+    let denom = ray_dir.y;
+    if denom.abs() < 1e-6 {
+        return None; // Ray parallel to plane
+    }
+
+    let t = (plane_y - ray_origin.y) / denom;
+    if t < 0.0 {
+        return None; // Behind ray origin
+    }
+
+    Some(ray_origin + ray_dir * t)
+}
 
 /// Draw the 3D viewport using the software rasterizer
 pub fn draw_viewport_3d(
@@ -20,23 +74,56 @@ pub fn draw_viewport_3d(
     let mouse_pos = (ctx.mouse.x, ctx.mouse.y);
     let inside_viewport = ctx.mouse.inside(&rect);
 
+    // Pre-calculate viewport scaling (used multiple times)
+    let fb_width = fb.width;
+    let fb_height = fb.height;
+    let fb_aspect = fb_width as f32 / fb_height as f32;
+    let rect_aspect = rect.w / rect.h;
+    let (draw_w, draw_h, draw_x, draw_y) = if fb_aspect > rect_aspect {
+        let w = rect.w;
+        let h = rect.w / fb_aspect;
+        (w, h, rect.x, rect.y + (rect.h - h) * 0.5)
+    } else {
+        let h = rect.h;
+        let w = rect.h * fb_aspect;
+        (w, h, rect.x + (rect.w - w) * 0.5, rect.y)
+    };
+
+    // Helper to convert screen mouse to framebuffer coordinates
+    let screen_to_fb = |mx: f32, my: f32| -> Option<(f32, f32)> {
+        if mx >= draw_x && mx < draw_x + draw_w && my >= draw_y && my < draw_y + draw_h {
+            let fb_x = (mx - draw_x) / draw_w * fb_width as f32;
+            let fb_y = (my - draw_y) / draw_h * fb_height as f32;
+            Some((fb_x, fb_y))
+        } else {
+            None
+        }
+    };
+
+    // Helper to convert framebuffer to screen coordinates
+    let fb_to_screen = |fb_x: f32, fb_y: f32| -> (f32, f32) {
+        let screen_x = draw_x + (fb_x / fb_width as f32) * draw_w;
+        let screen_y = draw_y + (fb_y / fb_height as f32) * draw_h;
+        (screen_x, screen_y)
+    };
+
     // Camera rotation with right mouse button (same as game mode)
-    if ctx.mouse.right_down && inside_viewport {
+    // Only rotate camera when not dragging a vertex
+    if ctx.mouse.right_down && inside_viewport && state.viewport_dragging_vertex.is_none() {
         if state.viewport_mouse_captured {
-            // Calculate delta from last position
             let dx = -(mouse_pos.1 - state.viewport_last_mouse.1) * 0.005;
             let dy = (mouse_pos.0 - state.viewport_last_mouse.0) * 0.005;
             state.camera_3d.rotate(dx, dy);
         }
         state.viewport_mouse_captured = true;
-    } else {
+    } else if !ctx.mouse.right_down {
         state.viewport_mouse_captured = false;
     }
     state.viewport_last_mouse = mouse_pos;
 
-    // Keyboard camera movement (WASD + Q/E) - only when viewport focused (right click or inside)
+    // Keyboard camera movement (WASD + Q/E) - only when viewport focused and not dragging
     let move_speed = 0.1;
-    if inside_viewport || state.viewport_mouse_captured {
+    if (inside_viewport || state.viewport_mouse_captured) && state.viewport_dragging_vertex.is_none() {
         if is_key_down(KeyCode::W) {
             state.camera_3d.position = state.camera_3d.position + state.camera_3d.basis_z * move_speed;
         }
@@ -57,31 +144,117 @@ pub fn draw_viewport_3d(
         }
     }
 
-    // Face picking on left-click
-    if ctx.mouse.clicked(&rect) && !ctx.mouse.right_down {
-        // Convert screen mouse position to framebuffer coordinates
-        // Account for aspect-correct scaling
-        let fb_aspect = fb.width as f32 / fb.height as f32;
-        let rect_aspect = rect.w / rect.h;
+    // Find vertex under mouse cursor (for picking/dragging)
+    let mut hovered_vertex: Option<(usize, usize, f32)> = None; // (room_idx, vertex_idx, screen_dist)
+    if inside_viewport && !ctx.mouse.right_down {
+        if let Some((fb_x, fb_y)) = screen_to_fb(mouse_pos.0, mouse_pos.1) {
+            for (room_idx, room) in state.level.rooms.iter().enumerate() {
+                for (vert_idx, vert) in room.vertices.iter().enumerate() {
+                    let world_pos = *vert + room.position;
+                    if let Some((sx, sy)) = world_to_screen(
+                        world_pos,
+                        state.camera_3d.position,
+                        state.camera_3d.basis_x,
+                        state.camera_3d.basis_y,
+                        state.camera_3d.basis_z,
+                        fb.width,
+                        fb.height,
+                    ) {
+                        let dist = ((fb_x - sx).powi(2) + (fb_y - sy).powi(2)).sqrt();
+                        if dist < 10.0 {
+                            // Check if this is closer than current best
+                            if hovered_vertex.map_or(true, |(_, _, best_dist)| dist < best_dist) {
+                                hovered_vertex = Some((room_idx, vert_idx, dist));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
-        let (draw_w, draw_h, draw_x, draw_y) = if fb_aspect > rect_aspect {
-            let w = rect.w;
-            let h = rect.w / fb_aspect;
-            (w, h, rect.x, rect.y + (rect.h - h) * 0.5)
-        } else {
-            let h = rect.h;
-            let w = rect.h * fb_aspect;
-            (w, h, rect.x + (rect.w - w) * 0.5, rect.y)
-        };
+    // Handle vertex selection and dragging
+    if inside_viewport && !ctx.mouse.right_down {
+        // Start dragging on left press
+        if ctx.mouse.left_pressed {
+            if let Some((room_idx, vert_idx, _)) = hovered_vertex {
+                // Select and start dragging this vertex
+                state.selection = Selection::Vertex { room: room_idx, vertex: vert_idx };
+                state.viewport_dragging_vertex = Some((room_idx, vert_idx));
+                state.viewport_drag_started = false;
 
-        // Check if mouse is within the actual rendered area
-        let mx = mouse_pos.0;
-        let my = mouse_pos.1;
-        if mx >= draw_x && mx < draw_x + draw_w && my >= draw_y && my < draw_y + draw_h {
-            // Convert to framebuffer pixel coordinates
-            let fb_x = ((mx - draw_x) / draw_w * fb.width as f32) as f32;
-            let fb_y = ((my - draw_y) / draw_h * fb.height as f32) as f32;
+                // Store the Y height of the vertex for the drag plane
+                if let Some(room) = state.level.rooms.get(room_idx) {
+                    if let Some(vert) = room.vertices.get(vert_idx) {
+                        state.viewport_drag_plane_y = vert.y + room.position.y;
+                    }
+                }
+            }
+        }
 
+        // Continue dragging
+        if ctx.mouse.left_down {
+            if let Some((room_idx, vert_idx)) = state.viewport_dragging_vertex {
+                if let Some((fb_x, fb_y)) = screen_to_fb(mouse_pos.0, mouse_pos.1) {
+                    // Cast ray from camera through mouse position
+                    let (ray_origin, ray_dir) = screen_to_ray(
+                        fb_x,
+                        fb_y,
+                        fb.width,
+                        fb.height,
+                        state.camera_3d.position,
+                        state.camera_3d.basis_x,
+                        state.camera_3d.basis_y,
+                        state.camera_3d.basis_z,
+                    );
+
+                    // Intersect with horizontal plane at vertex's Y height
+                    if let Some(hit_pos) = ray_plane_intersect(ray_origin, ray_dir, state.viewport_drag_plane_y) {
+                        // Save undo on first actual movement
+                        if !state.viewport_drag_started {
+                            state.save_undo();
+                            state.viewport_drag_started = true;
+                        }
+
+                        // Get room position offset
+                        let room_pos = state.level.rooms.get(room_idx)
+                            .map(|r| r.position)
+                            .unwrap_or(Vec3::new(0.0, 0.0, 0.0));
+
+                        // Calculate new vertex position (local to room)
+                        let new_x = hit_pos.x - room_pos.x;
+                        let new_z = hit_pos.z - room_pos.z;
+
+                        // Snap to grid if enabled
+                        let (snapped_x, snapped_z) = if state.show_grid {
+                            let snap = state.grid_size;
+                            ((new_x / snap).round() * snap, (new_z / snap).round() * snap)
+                        } else {
+                            (new_x, new_z)
+                        };
+
+                        // Update vertex position
+                        if let Some(room) = state.level.rooms.get_mut(room_idx) {
+                            if let Some(v) = room.vertices.get_mut(vert_idx) {
+                                v.x = snapped_x;
+                                v.z = snapped_z;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // End dragging on release
+        if ctx.mouse.left_released {
+            state.viewport_dragging_vertex = None;
+            state.viewport_drag_started = false;
+        }
+    }
+
+    // Face picking on left-click (only if not clicking a vertex)
+    if ctx.mouse.clicked(&rect) && !ctx.mouse.right_down && hovered_vertex.is_none() {
+        if let Some((fb_x, fb_y)) = screen_to_fb(mouse_pos.0, mouse_pos.1) {
             // Cast ray from camera
             let (ray_origin, ray_dir) = screen_to_ray(
                 fb_x,
@@ -95,24 +268,21 @@ pub fn draw_viewport_3d(
             );
 
             // Test ray against all room faces
-            let mut best_hit: Option<(usize, usize, f32)> = None; // (room_idx, face_idx, distance)
+            let mut best_hit: Option<(usize, usize, f32)> = None;
 
             for (room_idx, room) in state.level.rooms.iter().enumerate() {
                 for (face_idx, face) in room.faces.iter().enumerate() {
-                    // Get world-space vertices
                     let v0 = room.vertices[face.indices[0]] + room.position;
                     let v1 = room.vertices[face.indices[1]] + room.position;
                     let v2 = room.vertices[face.indices[2]] + room.position;
                     let v3 = room.vertices[face.indices[3]] + room.position;
 
-                    // Test first triangle (v0, v1, v2)
                     if let Some(t) = ray_triangle_intersect(ray_origin, ray_dir, v0, v1, v2) {
                         if best_hit.map_or(true, |(_, _, best_t)| t < best_t) {
                             best_hit = Some((room_idx, face_idx, t));
                         }
                     }
 
-                    // Test second triangle for quads (v0, v2, v3)
                     if !face.is_triangle {
                         if let Some(t) = ray_triangle_intersect(ray_origin, ray_dir, v0, v2, v3) {
                             if best_hit.map_or(true, |(_, _, best_t)| t < best_t) {
@@ -123,7 +293,7 @@ pub fn draw_viewport_3d(
                 }
             }
 
-            // Select the closest hit face and apply texture
+            // Select face and apply texture
             if let Some((room_idx, face_idx, _)) = best_hit {
                 state.selection = Selection::Face { room: room_idx, face: face_idx };
                 let texture_id = state.selected_texture;
@@ -140,25 +310,107 @@ pub fn draw_viewport_3d(
     // Clear framebuffer
     fb.clear(RasterColor::new(30, 30, 40));
 
+    // Draw grid on floor (Y=0) if enabled
+    if state.show_grid {
+        let grid_color = RasterColor::new(50, 50, 60);
+        let grid_size = state.grid_size;
+        let grid_extent = 20.0; // How far the grid extends
+
+        // Draw grid lines - use shorter segments for better clipping behavior
+        let segment_length: f32 = 4.0;
+
+        // X-parallel lines (varying X, fixed Z)
+        let mut z: f32 = -grid_extent;
+        while z <= grid_extent {
+            let mut x: f32 = -grid_extent;
+            while x < grid_extent {
+                let x_end = (x + segment_length).min(grid_extent);
+                draw_3d_line(
+                    fb,
+                    Vec3::new(x, 0.0, z),
+                    Vec3::new(x_end, 0.0, z),
+                    &state.camera_3d,
+                    grid_color,
+                );
+                x += segment_length;
+            }
+            z += grid_size;
+        }
+
+        // Z-parallel lines (fixed X, varying Z)
+        let mut x: f32 = -grid_extent;
+        while x <= grid_extent {
+            let mut z: f32 = -grid_extent;
+            while z < grid_extent {
+                let z_end = (z + segment_length).min(grid_extent);
+                draw_3d_line(
+                    fb,
+                    Vec3::new(x, 0.0, z),
+                    Vec3::new(x, 0.0, z_end),
+                    &state.camera_3d,
+                    grid_color,
+                );
+                z += segment_length;
+            }
+            x += grid_size;
+        }
+
+        // Draw origin axes (slightly brighter) - also segmented
+        let mut x = -grid_extent;
+        while x < grid_extent {
+            let x_end = (x + segment_length).min(grid_extent);
+            draw_3d_line(fb, Vec3::new(x, 0.0, 0.0), Vec3::new(x_end, 0.0, 0.0), &state.camera_3d, RasterColor::new(100, 60, 60));
+            x += segment_length;
+        }
+        let mut z = -grid_extent;
+        while z < grid_extent {
+            let z_end = (z + segment_length).min(grid_extent);
+            draw_3d_line(fb, Vec3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, z_end), &state.camera_3d, RasterColor::new(60, 60, 100));
+            z += segment_length;
+        }
+    }
+
     // Render all rooms
     for room in &state.level.rooms {
         let (vertices, faces) = room.to_render_data();
         render_mesh(fb, &vertices, &faces, textures, &state.camera_3d, settings);
     }
 
-    // Store selected face edges for later drawing as 2D overlay
-    let mut selected_face_screen_verts: Option<(Vec<(f32, f32)>, bool)> = None;
+    // Collect vertex screen positions for overlay drawing
+    let mut vertex_overlays: Vec<(f32, f32, bool, bool)> = Vec::new(); // (screen_x, screen_y, is_selected, is_hovered)
+
+    for (room_idx, room) in state.level.rooms.iter().enumerate() {
+        for (vert_idx, vert) in room.vertices.iter().enumerate() {
+            let world_pos = *vert + room.position;
+            if let Some((fb_sx, fb_sy)) = world_to_screen(
+                world_pos,
+                state.camera_3d.position,
+                state.camera_3d.basis_x,
+                state.camera_3d.basis_y,
+                state.camera_3d.basis_z,
+                fb.width,
+                fb.height,
+            ) {
+                let is_selected = matches!(state.selection, Selection::Vertex { room: r, vertex: v } if r == room_idx && v == vert_idx);
+                let is_hovered = hovered_vertex.map_or(false, |(ri, vi, _)| ri == room_idx && vi == vert_idx);
+                let is_dragging = state.viewport_dragging_vertex == Some((room_idx, vert_idx));
+
+                vertex_overlays.push((fb_sx, fb_sy, is_selected || is_dragging, is_hovered));
+            }
+        }
+    }
+
+    // Store selected face edges for overlay
+    let mut selected_face_screen_verts: Option<Vec<(f32, f32)>> = None;
 
     if let Selection::Face { room: room_idx, face: face_idx } = state.selection {
         if let Some(room) = state.level.rooms.get(room_idx) {
             if let Some(face) = room.faces.get(face_idx) {
-                // Get world-space vertices
                 let v0 = room.vertices[face.indices[0]] + room.position;
                 let v1 = room.vertices[face.indices[1]] + room.position;
                 let v2 = room.vertices[face.indices[2]] + room.position;
                 let v3 = room.vertices[face.indices[3]] + room.position;
 
-                // Project vertices to screen space using camera transform
                 let world_verts = if face.is_triangle {
                     vec![v0, v1, v2]
                 } else {
@@ -169,33 +421,24 @@ pub fn draw_viewport_3d(
                 let mut all_visible = true;
 
                 for v in &world_verts {
-                    // Transform to camera space
-                    let rel = *v - state.camera_3d.position;
-                    let cam_x = rel.dot(state.camera_3d.basis_x);
-                    let cam_y = rel.dot(state.camera_3d.basis_y);
-                    let cam_z = rel.dot(state.camera_3d.basis_z);
-
-                    // Check if behind camera
-                    if cam_z <= 0.1 {
+                    if let Some((sx, sy)) = world_to_screen(
+                        *v,
+                        state.camera_3d.position,
+                        state.camera_3d.basis_x,
+                        state.camera_3d.basis_y,
+                        state.camera_3d.basis_z,
+                        fb.width,
+                        fb.height,
+                    ) {
+                        screen_verts.push((sx, sy));
+                    } else {
                         all_visible = false;
                         break;
                     }
-
-                    // Project to screen (matching the rasterizer's projection)
-                    const SCALE: f32 = 0.75;
-                    let vs = (fb.width.min(fb.height) as f32 / 2.0) * SCALE;
-                    let ud = 5.0;
-                    let us = ud - 1.0;
-
-                    let denom = cam_z + ud;
-                    let sx = (cam_x * us / denom) * vs + (fb.width as f32 / 2.0);
-                    let sy = (cam_y * us / denom) * vs + (fb.height as f32 / 2.0);
-
-                    screen_verts.push((sx, sy));
                 }
 
                 if all_visible && screen_verts.len() >= 3 {
-                    selected_face_screen_verts = Some((screen_verts, face.is_triangle));
+                    selected_face_screen_verts = Some(screen_verts);
                 }
             }
         }
@@ -204,22 +447,6 @@ pub fn draw_viewport_3d(
     // Convert framebuffer to texture and draw to viewport
     let texture = Texture2D::from_rgba8(fb.width as u16, fb.height as u16, &fb.pixels);
     texture.set_filter(FilterMode::Nearest);
-
-    // Calculate aspect-correct scaling
-    let fb_aspect = fb.width as f32 / fb.height as f32;
-    let rect_aspect = rect.w / rect.h;
-
-    let (draw_w, draw_h, draw_x, draw_y) = if fb_aspect > rect_aspect {
-        // Framebuffer is wider - fit to width
-        let w = rect.w;
-        let h = rect.w / fb_aspect;
-        (w, h, rect.x, rect.y + (rect.h - h) * 0.5)
-    } else {
-        // Framebuffer is taller - fit to height
-        let h = rect.h;
-        let w = rect.h * fb_aspect;
-        (w, h, rect.x + (rect.w - w) * 0.5, rect.y)
-    };
 
     draw_texture_ex(
         &texture,
@@ -236,29 +463,41 @@ pub fn draw_viewport_3d(
     draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.0, Color::from_rgba(60, 60, 60, 255));
 
     // Draw selected face outline as 2D overlay
-    if let Some((screen_verts, _is_triangle)) = selected_face_screen_verts {
-        // Convert framebuffer coordinates to screen coordinates
-        let to_screen = |fb_x: f32, fb_y: f32| -> (f32, f32) {
-            let screen_x = draw_x + (fb_x / fb.width as f32) * draw_w;
-            let screen_y = draw_y + (fb_y / fb.height as f32) * draw_h;
-            (screen_x, screen_y)
-        };
-
+    if let Some(screen_verts) = selected_face_screen_verts {
         let highlight_color = Color::from_rgba(255, 200, 50, 255);
         let n = screen_verts.len();
 
-        // Draw edges
         for i in 0..n {
-            let (x1, y1) = to_screen(screen_verts[i].0, screen_verts[i].1);
-            let (x2, y2) = to_screen(screen_verts[(i + 1) % n].0, screen_verts[(i + 1) % n].1);
+            let (x1, y1) = fb_to_screen(screen_verts[i].0, screen_verts[i].1);
+            let (x2, y2) = fb_to_screen(screen_verts[(i + 1) % n].0, screen_verts[(i + 1) % n].1);
             draw_line(x1, y1, x2, y2, 2.0, highlight_color);
         }
 
-        // Draw corner markers
         for (fx, fy) in &screen_verts {
-            let (sx, sy) = to_screen(*fx, *fy);
+            let (sx, sy) = fb_to_screen(*fx, *fy);
             draw_circle(sx, sy, 4.0, highlight_color);
         }
+    }
+
+    // Draw vertex overlays
+    for (fb_x, fb_y, is_selected, is_hovered) in vertex_overlays {
+        let (sx, sy) = fb_to_screen(fb_x, fb_y);
+
+        // Skip if outside viewport
+        if sx < rect.x || sx > rect.right() || sy < rect.y || sy > rect.bottom() {
+            continue;
+        }
+
+        let color = if is_selected {
+            Color::from_rgba(100, 255, 100, 255) // Green when selected/dragging
+        } else if is_hovered {
+            Color::from_rgba(255, 200, 150, 255) // Orange when hovered
+        } else {
+            Color::from_rgba(200, 200, 220, 200) // Default (slightly transparent)
+        };
+
+        let radius = if is_selected || is_hovered { 5.0 } else { 3.0 };
+        draw_circle(sx, sy, radius, color);
     }
 
     // Draw camera info
@@ -274,4 +513,86 @@ pub fn draw_viewport_3d(
         12.0,
         Color::from_rgba(150, 150, 150, 255),
     );
+}
+
+/// Draw a 3D line into the framebuffer using Bresenham's algorithm
+fn draw_3d_line(
+    fb: &mut Framebuffer,
+    p0: Vec3,
+    p1: Vec3,
+    camera: &crate::rasterizer::Camera,
+    color: RasterColor,
+) {
+    const NEAR_PLANE: f32 = 0.1;
+
+    // Transform to camera space
+    let rel0 = p0 - camera.position;
+    let rel1 = p1 - camera.position;
+
+    let z0 = rel0.dot(camera.basis_z);
+    let z1 = rel1.dot(camera.basis_z);
+
+    // Both behind camera - skip entirely
+    if z0 <= NEAR_PLANE && z1 <= NEAR_PLANE {
+        return;
+    }
+
+    // Clip line to near plane if needed
+    let (clipped_p0, clipped_p1) = if z0 <= NEAR_PLANE {
+        // p0 is behind, clip it
+        let t = (NEAR_PLANE - z0) / (z1 - z0);
+        let new_p0 = p0 + (p1 - p0) * t;
+        (new_p0, p1)
+    } else if z1 <= NEAR_PLANE {
+        // p1 is behind, clip it
+        let t = (NEAR_PLANE - z0) / (z1 - z0);
+        let new_p1 = p0 + (p1 - p0) * t;
+        (p0, new_p1)
+    } else {
+        // Both in front
+        (p0, p1)
+    };
+
+    // Project clipped endpoints
+    let s0 = world_to_screen(clipped_p0, camera.position, camera.basis_x, camera.basis_y, camera.basis_z, fb.width, fb.height);
+    let s1 = world_to_screen(clipped_p1, camera.position, camera.basis_x, camera.basis_y, camera.basis_z, fb.width, fb.height);
+
+    let (Some((x0f, y0f)), Some((x1f, y1f))) = (s0, s1) else {
+        return;
+    };
+
+    // Convert to integers for Bresenham
+    let mut x0 = x0f as i32;
+    let mut y0 = y0f as i32;
+    let x1 = x1f as i32;
+    let y1 = y1f as i32;
+
+    let dx = (x1 - x0).abs();
+    let dy = -(y1 - y0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+
+    let w = fb.width as i32;
+    let h = fb.height as i32;
+
+    loop {
+        if x0 >= 0 && x0 < w && y0 >= 0 && y0 < h {
+            fb.set_pixel(x0 as usize, y0 as usize, color);
+        }
+
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x0 += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y0 += sy;
+        }
+    }
 }

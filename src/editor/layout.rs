@@ -98,7 +98,7 @@ pub fn draw_editor(
     draw_viewport_3d(ctx, panel_content_rect(center_rect, true), state, textures, fb, settings);
 
     draw_panel(texture_rect, Some("Textures"), Color::from_rgba(35, 35, 40, 255));
-    draw_texture_palette(ctx, panel_content_rect(texture_rect, true), state, textures);
+    draw_texture_palette(ctx, panel_content_rect(texture_rect, true), state);
 
     draw_panel(props_rect, Some("Properties"), Color::from_rgba(35, 35, 40, 255));
     draw_properties(ctx, panel_content_rect(props_rect, true), state);
@@ -246,31 +246,32 @@ fn draw_toolbar(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) {
 }
 
 fn draw_room_properties(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) {
-    let mut y = rect.y;
+    let mut y = rect.y.floor();
+    let x = rect.x.floor();
     let line_height = 20.0;
 
     if let Some(room) = state.current_room() {
-        draw_text(&format!("ID: {}", room.id), rect.x, y + 14.0, 14.0, WHITE);
+        draw_text(&format!("ID: {}", room.id), x, (y + 14.0).floor(), 16.0, WHITE);
         y += line_height;
 
         draw_text(
             &format!("Pos: ({:.1}, {:.1}, {:.1})", room.position.x, room.position.y, room.position.z),
-            rect.x, y + 14.0, 14.0, WHITE,
+            x, (y + 14.0).floor(), 16.0, WHITE,
         );
         y += line_height;
 
-        draw_text(&format!("Vertices: {}", room.vertices.len()), rect.x, y + 14.0, 14.0, WHITE);
+        draw_text(&format!("Vertices: {}", room.vertices.len()), x, (y + 14.0).floor(), 16.0, WHITE);
         y += line_height;
 
-        draw_text(&format!("Faces: {}", room.faces.len()), rect.x, y + 14.0, 14.0, WHITE);
+        draw_text(&format!("Faces: {}", room.faces.len()), x, (y + 14.0).floor(), 16.0, WHITE);
         y += line_height;
 
-        draw_text(&format!("Portals: {}", room.portals.len()), rect.x, y + 14.0, 14.0, WHITE);
+        draw_text(&format!("Portals: {}", room.portals.len()), x, (y + 14.0).floor(), 16.0, WHITE);
         y += line_height;
 
         // Room list
         y += 10.0;
-        draw_text("Rooms:", rect.x, y + 14.0, 14.0, Color::from_rgba(150, 150, 150, 255));
+        draw_text("Rooms:", x, (y + 14.0).floor(), 16.0, Color::from_rgba(150, 150, 150, 255));
         y += line_height;
 
         for (i, room) in state.level.rooms.iter().enumerate() {
@@ -281,16 +282,16 @@ fn draw_room_properties(ctx: &mut UiContext, rect: Rect, state: &mut EditorState
                 WHITE
             };
 
-            let room_btn_rect = Rect::new(rect.x, y, rect.w - 4.0, line_height);
+            let room_btn_rect = Rect::new(x, y, rect.w - 4.0, line_height);
             if ctx.mouse.clicked(&room_btn_rect) {
                 state.current_room = i;
             }
 
             if is_selected {
-                draw_rectangle(room_btn_rect.x, room_btn_rect.y, room_btn_rect.w, room_btn_rect.h, Color::from_rgba(60, 80, 60, 255));
+                draw_rectangle(room_btn_rect.x.floor(), room_btn_rect.y.floor(), room_btn_rect.w, room_btn_rect.h, Color::from_rgba(60, 80, 60, 255));
             }
 
-            draw_text(&format!("  Room {} ({} faces)", room.id, room.faces.len()), rect.x, y + 14.0, 14.0, color);
+            draw_text(&format!("  Room {} ({} faces)", room.id, room.faces.len()), x, (y + 14.0).floor(), 16.0, color);
             y += line_height;
 
             if y > rect.bottom() - line_height {
@@ -298,52 +299,53 @@ fn draw_room_properties(ctx: &mut UiContext, rect: Rect, state: &mut EditorState
             }
         }
     } else {
-        draw_text("No room selected", rect.x, y + 14.0, 14.0, Color::from_rgba(150, 150, 150, 255));
+        draw_text("No room selected", x, (y + 14.0).floor(), 16.0, Color::from_rgba(150, 150, 150, 255));
     }
 }
 
-fn draw_properties(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) {
-    let mut y = rect.y;
+fn draw_properties(_ctx: &mut UiContext, rect: Rect, state: &mut EditorState) {
+    let mut y = rect.y.floor();
+    let x = rect.x.floor();
     let line_height = 20.0;
 
     match &state.selection {
         super::Selection::None => {
-            draw_text("Nothing selected", rect.x, y + 14.0, 14.0, Color::from_rgba(150, 150, 150, 255));
+            draw_text("Nothing selected", x, (y + 14.0).floor(), 16.0, Color::from_rgba(150, 150, 150, 255));
         }
         super::Selection::Room(idx) => {
-            draw_text(&format!("Room {}", idx), rect.x, y + 14.0, 14.0, WHITE);
+            draw_text(&format!("Room {}", idx), x, (y + 14.0).floor(), 16.0, WHITE);
         }
         super::Selection::Face { room, face } => {
-            draw_text(&format!("Face {} in Room {}", face, room), rect.x, y + 14.0, 14.0, WHITE);
+            draw_text(&format!("Face {} in Room {}", face, room), x, (y + 14.0).floor(), 16.0, WHITE);
             y += line_height;
 
             if let Some(r) = state.level.rooms.get(*room) {
                 if let Some(f) = r.faces.get(*face) {
-                    draw_text(&format!("Texture: {}", f.texture_id), rect.x, y + 14.0, 14.0, WHITE);
+                    draw_text(&format!("Texture: {}", f.texture_id), x, (y + 14.0).floor(), 16.0, WHITE);
                     y += line_height;
-                    draw_text(&format!("Triangle: {}", f.is_triangle), rect.x, y + 14.0, 14.0, WHITE);
+                    draw_text(&format!("Triangle: {}", f.is_triangle), x, (y + 14.0).floor(), 16.0, WHITE);
                     y += line_height;
-                    draw_text(&format!("Double-sided: {}", f.double_sided), rect.x, y + 14.0, 14.0, WHITE);
+                    draw_text(&format!("Double-sided: {}", f.double_sided), x, (y + 14.0).floor(), 16.0, WHITE);
                 }
             }
         }
         super::Selection::Vertex { room, vertex } => {
-            draw_text(&format!("Vertex {} in Room {}", vertex, room), rect.x, y + 14.0, 14.0, WHITE);
+            draw_text(&format!("Vertex {} in Room {}", vertex, room), x, (y + 14.0).floor(), 16.0, WHITE);
         }
         super::Selection::Portal { room, portal } => {
-            draw_text(&format!("Portal {} in Room {}", portal, room), rect.x, y + 14.0, 14.0, WHITE);
+            draw_text(&format!("Portal {} in Room {}", portal, room), x, (y + 14.0).floor(), 16.0, WHITE);
         }
     }
 
     // Selected texture preview
-    y = rect.y + 100.0;
-    draw_text("Selected Texture:", rect.x, y + 14.0, 14.0, Color::from_rgba(150, 150, 150, 255));
+    y = (rect.y + 100.0).floor();
+    draw_text("Selected Texture:", x, (y + 14.0).floor(), 16.0, Color::from_rgba(150, 150, 150, 255));
     y += line_height;
-    draw_text(&format!("ID: {}", state.selected_texture), rect.x, y + 14.0, 14.0, WHITE);
+    draw_text(&format!("ID: {}", state.selected_texture), x, (y + 14.0).floor(), 16.0, WHITE);
 }
 
 fn draw_status_bar(rect: Rect, state: &EditorState) {
-    draw_rectangle(rect.x, rect.y, rect.w, rect.h, Color::from_rgba(40, 40, 45, 255));
+    draw_rectangle(rect.x.floor(), rect.y.floor(), rect.w, rect.h, Color::from_rgba(40, 40, 45, 255));
 
     // Show status message if available, otherwise show default status
     let status = if let Some(msg) = state.get_status() {
@@ -358,16 +360,16 @@ fn draw_status_bar(rect: Rect, state: &EditorState) {
         )
     };
 
-    draw_text(&status, rect.x + 8.0, rect.y + 15.0, 14.0, WHITE);
+    draw_text(&status, (rect.x + 8.0).floor(), (rect.y + 15.0).floor(), 16.0, WHITE);
 
     // Show keyboard shortcuts hint on the right
     let hints = "Ctrl+S: Save | Ctrl+Shift+S: Save As | Ctrl+O: Open | Ctrl+N: New";
     let hint_width = hints.len() as f32 * 6.0; // Approximate width
     draw_text(
         hints,
-        rect.right() - hint_width - 8.0,
-        rect.y + 15.0,
-        12.0,
+        (rect.right() - hint_width - 8.0).floor(),
+        (rect.y + 15.0).floor(),
+        14.0,
         Color::from_rgba(100, 100, 100, 255),
     );
 }

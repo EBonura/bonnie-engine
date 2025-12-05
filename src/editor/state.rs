@@ -2,7 +2,61 @@
 
 use std::path::PathBuf;
 use crate::world::Level;
-use crate::rasterizer::{Camera, Vec3};
+use crate::rasterizer::{Camera, Vec3, Texture};
+
+/// A texture pack loaded from a folder
+pub struct TexturePack {
+    pub name: String,
+    pub path: PathBuf,
+    pub textures: Vec<Texture>,
+}
+
+impl TexturePack {
+    /// Load a texture pack from a directory
+    pub fn from_directory(path: PathBuf) -> Option<Self> {
+        let name = path.file_name()?.to_string_lossy().to_string();
+        let textures = Texture::load_directory(&path);
+        if textures.is_empty() {
+            // Try loading from subdirectories (some packs have nested folders)
+            let mut all_textures = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&path) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let entry_path = entry.path();
+                    if entry_path.is_dir() {
+                        all_textures.extend(Texture::load_directory(&entry_path));
+                    }
+                }
+            }
+            if all_textures.is_empty() {
+                return None;
+            }
+            Some(Self { name, path, textures: all_textures })
+        } else {
+            Some(Self { name, path, textures })
+        }
+    }
+
+    /// Discover all texture packs in the assets/textures directory
+    pub fn discover_all() -> Vec<Self> {
+        let mut packs = Vec::new();
+        let textures_dir = PathBuf::from("assets/textures");
+
+        if let Ok(entries) = std::fs::read_dir(&textures_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.is_dir() {
+                    if let Some(pack) = Self::from_directory(path) {
+                        packs.push(pack);
+                    }
+                }
+            }
+        }
+
+        // Sort by name
+        packs.sort_by(|a, b| a.name.cmp(&b.name));
+        packs
+    }
+}
 
 /// Current editor tool
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -76,12 +130,29 @@ pub struct EditorState {
     pub grid_panning: bool,
     pub grid_dragging_vertex: Option<usize>,
     pub grid_drag_started: bool, // True if we've started dragging (for undo)
+
+    /// 3D viewport vertex dragging state
+    pub viewport_dragging_vertex: Option<(usize, usize)>, // (room_idx, vertex_idx)
+    pub viewport_drag_started: bool,
+    pub viewport_drag_plane_y: f32, // Y height of the drag plane
+
+    /// Texture palette state
+    pub texture_packs: Vec<TexturePack>,
+    pub selected_pack: usize,
+    pub texture_scroll: f32,
 }
 
 impl EditorState {
     pub fn new(level: Level) -> Self {
         let mut camera_3d = Camera::new();
         camera_3d.position = Vec3::new(0.0, 5.0, -10.0);
+
+        // Discover all texture packs
+        let texture_packs = TexturePack::discover_all();
+        println!("Discovered {} texture packs", texture_packs.len());
+        for pack in &texture_packs {
+            println!("  - {} ({} textures)", pack.name, pack.textures.len());
+        }
 
         Self {
             level,
@@ -106,6 +177,12 @@ impl EditorState {
             grid_panning: false,
             grid_dragging_vertex: None,
             grid_drag_started: false,
+            viewport_dragging_vertex: None,
+            viewport_drag_started: false,
+            viewport_drag_plane_y: 0.0,
+            texture_packs,
+            selected_pack: 0,
+            texture_scroll: 0.0,
         }
     }
 
@@ -168,5 +245,21 @@ impl EditorState {
     /// Get current room mutably
     pub fn current_room_mut(&mut self) -> Option<&mut crate::world::Room> {
         self.level.rooms.get_mut(self.current_room)
+    }
+
+    /// Get textures from the currently selected pack
+    pub fn current_textures(&self) -> &[Texture] {
+        self.texture_packs
+            .get(self.selected_pack)
+            .map(|p| p.textures.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Get the name of the currently selected pack
+    pub fn current_pack_name(&self) -> &str {
+        self.texture_packs
+            .get(self.selected_pack)
+            .map(|p| p.name.as_str())
+            .unwrap_or("(none)")
     }
 }

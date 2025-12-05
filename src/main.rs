@@ -17,7 +17,7 @@ use rasterizer::{
     Camera, Color as RasterColor, Framebuffer, RasterSettings, ShadingMode, Texture,
     render_mesh, HEIGHT, WIDTH,
 };
-use world::{Level, create_test_level, load_level, save_level};
+use world::{Level, create_test_level, create_empty_level, load_level, save_level};
 use ui::{UiContext, MouseState};
 use editor::{EditorState, EditorLayout, EditorAction, draw_editor};
 use std::path::PathBuf;
@@ -303,7 +303,7 @@ async fn main() {
                     }
                     EditorAction::New => {
                         // Create a new empty level with one room
-                        let new_level = create_test_level();
+                        let new_level = create_empty_level();
                         editor_state = EditorState::new(new_level);
                         editor_state.set_status("Created new level", 3.0);
                         println!("Created new level");

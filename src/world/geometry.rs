@@ -313,6 +313,28 @@ impl Level {
     }
 }
 
+/// Create an empty level with a single starter room (floor only)
+pub fn create_empty_level() -> Level {
+    let mut level = Level::new();
+
+    // Create a single starter room with just a floor
+    let mut room0 = Room::new(0, Vec3::ZERO);
+
+    // Floor vertices (y = 0, 4x4 floor)
+    let f0 = room0.add_vertex(-2.0, 0.0, -2.0);
+    let f1 = room0.add_vertex(2.0, 0.0, -2.0);
+    let f2 = room0.add_vertex(2.0, 0.0, 2.0);
+    let f3 = room0.add_vertex(-2.0, 0.0, 2.0);
+
+    // Just a floor face
+    room0.add_quad(f0, f1, f2, f3, 0);
+
+    room0.recalculate_bounds();
+    level.rooms.push(room0);
+
+    level
+}
+
 /// Create a simple test level with two connected rooms
 pub fn create_test_level() -> Level {
     let mut level = Level::new();
