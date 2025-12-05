@@ -11,5 +11,5 @@ pub mod input;
 // Re-export commonly used types
 pub use menu::{XMBAction, XMBCategory, XMBItem, IconType, create_default_menu};
 pub use state::XMBState;
-pub use render::draw_xmb;
+pub use render::{draw_xmb, draw_xmb_with_font};
 pub use input::{process_input, process_input_with_mouse, check_activation, XMBInputResult};

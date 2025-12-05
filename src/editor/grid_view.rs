@@ -52,9 +52,13 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
     }
     state.grid_last_mouse = mouse_pos;
 
-    let Some(room) = state.current_room() else {
-        draw_text("No room", rect.x + 10.0, rect.y + 20.0, 14.0, Color::from_rgba(100, 100, 100, 255));
-        return;
+    // Clone room for read-only access (to avoid borrow checker issues with mutations)
+    let room = match state.level.rooms.get(state.current_room) {
+        Some(r) => r.clone(),
+        None => {
+            draw_text("No room", rect.x + 10.0, rect.y + 20.0, 14.0, Color::from_rgba(100, 100, 100, 255));
+            return;
+        }
     };
 
     // Calculate view transform
@@ -148,6 +152,9 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
         }
     }
 
+    // Store room index for use throughout function
+    let current_room_idx = state.current_room;
+
     // Draw room geometry (X-Z projection)
     // First pass: draw faces as filled polygons
     for (face_idx, face) in room.faces.iter().enumerate() {
@@ -163,6 +170,7 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
 
         // Check if this face is selected or hovered
         let is_selected = matches!(state.selection, Selection::Face { face, .. } if face == face_idx);
+        let is_multi_selected = state.is_multi_selected(&Selection::Face { room: current_room_idx, face: face_idx });
         let is_hovered = hovered_face_preview == Some(face_idx);
 
         // Determine face type by normal (approximate from Y component)
@@ -171,7 +179,9 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
         let normal_y = edge1.0 * edge2.2 - edge1.2 * edge2.0;
 
         let fill_color = if is_selected {
-            Color::from_rgba(255, 200, 100, 150) // Yellow-orange for selected
+            Color::from_rgba(255, 200, 100, 150) // Yellow-orange for selected (single selection)
+        } else if is_multi_selected {
+            Color::from_rgba(100, 255, 150, 130) // Green for multi-selected
         } else if is_hovered {
             Color::from_rgba(150, 200, 255, 120) // Light blue for hover
         } else if normal_y.abs() > 0.5 {
@@ -287,9 +297,6 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
         }
     }
 
-    // Store room index for later mutation
-    let current_room_idx = state.current_room;
-
     // Draw vertices
     for (i, v) in room.vertices.iter().enumerate() {
         let (sx, sy) = world_to_screen(v.x, v.z);
@@ -331,25 +338,46 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
 
             match state.tool {
                 EditorTool::Select => {
+                    // Check if Shift key is held for multi-selection
+                    let shift_held = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+
                     // Select mode - normal selection behavior
                     if let Some(vi) = hovered_vertex {
                         // Vertex has priority - select and start dragging
-                        state.selection = Selection::Vertex { room: current_room_idx, vertex: vi };
+                        if shift_held {
+                            state.toggle_multi_selection(Selection::Vertex { room: current_room_idx, vertex: vi });
+                        } else {
+                            state.selection = Selection::Vertex { room: current_room_idx, vertex: vi };
+                            state.clear_multi_selection();
+                        }
                         state.grid_dragging_vertex = Some(vi);
                         state.grid_drag_started = false;
                     } else if let Some(fi) = hovered_face {
-                        // Face clicked - select it and auto-select its texture
-                        state.selection = Selection::Face { room: current_room_idx, face: fi };
+                        // Face clicked - select it
+                        let face_selection = Selection::Face { room: current_room_idx, face: fi };
 
-                        // Auto-select the face's texture in the texture palette
-                        if let Some(room) = state.level.rooms.get(current_room_idx) {
+                        if shift_held {
+                            // Add to multi-selection
+                            state.toggle_multi_selection(face_selection);
+                        } else {
+                            // Normal selection
+                            state.selection = face_selection;
+                            state.clear_multi_selection();
+
+                            // Auto-select the face's texture in the texture palette
                             if let Some(face) = room.faces.get(fi) {
                                 state.selected_texture = face.texture.clone();
                             }
                         }
                     } else {
-                        // Clicked empty space - deselect
-                        state.selection = Selection::None;
+                        // Clicked empty space - start drag-to-select rectangle
+                        if !shift_held {
+                            state.selection = Selection::None;
+                            state.clear_multi_selection();
+                        }
+                        // Start selection rectangle
+                        state.selection_rect_start = Some(mouse_pos);
+                        state.selection_rect_end = Some(mouse_pos);
                     }
                 }
 
@@ -366,8 +394,7 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                         use crate::world::FaceType;
 
                         // Check if a floor already exists at this sector position
-                        let sector_occupied = if let Some(room) = state.level.rooms.get(current_room_idx) {
-                            room.faces.iter().any(|face| {
+                        let sector_occupied = room.faces.iter().any(|face| {
                                 if face.face_type != FaceType::Floor {
                                     return false;
                                 }
@@ -388,10 +415,7 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                                 const EPSILON: f32 = 1.0;
                                 center_x >= snapped_x + EPSILON && center_x < snapped_x + SECTOR_SIZE - EPSILON &&
                                 center_z >= snapped_z + EPSILON && center_z < snapped_z + SECTOR_SIZE - EPSILON
-                            })
-                        } else {
-                            false
-                        };
+                            });
 
                         if sector_occupied {
                             state.set_status("Sector already has a floor", 2.0);
@@ -428,8 +452,7 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                         use crate::world::FaceType;
 
                         // Check if a ceiling already exists at this sector position
-                        let sector_occupied = if let Some(room) = state.level.rooms.get(current_room_idx) {
-                            room.faces.iter().any(|face| {
+                        let sector_occupied = room.faces.iter().any(|face| {
                                 if face.face_type != FaceType::Ceiling {
                                     return false;
                                 }
@@ -450,10 +473,7 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                                 const EPSILON: f32 = 1.0;
                                 center_x >= snapped_x + EPSILON && center_x < snapped_x + SECTOR_SIZE - EPSILON &&
                                 center_z >= snapped_z + EPSILON && center_z < snapped_z + SECTOR_SIZE - EPSILON
-                            })
-                        } else {
-                            false
-                        };
+                            });
 
                         if sector_occupied {
                             state.set_status("Sector already has a ceiling", 2.0);
@@ -492,6 +512,11 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
 
         // Continue dragging
         if ctx.mouse.left_down {
+            // Update selection rectangle if dragging
+            if state.selection_rect_start.is_some() {
+                state.selection_rect_end = Some(mouse_pos);
+            }
+
             if let Some(vi) = state.grid_dragging_vertex {
                 // Save undo state on first actual movement
                 if !state.grid_drag_started {
@@ -523,15 +548,98 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
 
         // End dragging on release
         if ctx.mouse.left_released {
+            // Handle selection rectangle completion
+            if let (Some(start), Some(end)) = (state.selection_rect_start, state.selection_rect_end) {
+                // Calculate rectangle bounds
+                let min_x = start.0.min(end.0);
+                let max_x = start.0.max(end.0);
+                let min_y = start.1.min(end.1);
+                let max_y = start.1.max(end.1);
+
+                // Only process if rectangle is large enough (> 5 pixels)
+                if (max_x - min_x).abs() > 5.0 || (max_y - min_y).abs() > 5.0 {
+                    // Check if any vertex of the face is within the rectangle
+                    let in_rect = |p: (f32, f32)| {
+                        p.0 >= min_x && p.0 <= max_x && p.1 >= min_y && p.1 <= max_y
+                    };
+
+                    // Collect face selections
+                    let mut selected_faces = Vec::new();
+                    for (face_idx, face) in room.faces.iter().enumerate() {
+                        let v0 = room.vertices[face.indices[0]];
+                        let v1 = room.vertices[face.indices[1]];
+                        let v2 = room.vertices[face.indices[2]];
+                        let v3 = room.vertices[face.indices[3]];
+
+                        let s0 = world_to_screen(v0.x, v0.z);
+                        let s1 = world_to_screen(v1.x, v1.z);
+                        let s2 = world_to_screen(v2.x, v2.z);
+                        let s3 = world_to_screen(v3.x, v3.z);
+
+                        if in_rect(s0) || in_rect(s1) || in_rect(s2) || in_rect(s3) {
+                            selected_faces.push(Selection::Face { room: current_room_idx, face: face_idx });
+                        }
+                    }
+
+                    // Check if Shift key is still held
+                    let shift_held = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+
+                    if !shift_held {
+                        state.clear_multi_selection();
+                    }
+
+                    // Add all selected faces
+                    for face_sel in selected_faces {
+                        state.add_to_multi_selection(face_sel);
+                    }
+
+                    // Set status message
+                    if !state.multi_selection.is_empty() {
+                        state.set_status(&format!("Selected {} faces", state.multi_selection.len()), 2.0);
+                    }
+                }
+            }
+
+            state.selection_rect_start = None;
+            state.selection_rect_end = None;
             state.grid_dragging_vertex = None;
             state.grid_drag_started = false;
         }
     } else {
         // Mouse left the rect or started panning - cancel drag
         if !ctx.mouse.left_down {
+            state.selection_rect_start = None;
+            state.selection_rect_end = None;
             state.grid_dragging_vertex = None;
             state.grid_drag_started = false;
         }
+    }
+
+    // Draw selection rectangle if active
+    if let (Some(start), Some(end)) = (state.selection_rect_start, state.selection_rect_end) {
+        let min_x = start.0.min(end.0);
+        let max_x = start.0.max(end.0);
+        let min_y = start.1.min(end.1);
+        let max_y = start.1.max(end.1);
+
+        // Draw filled rectangle with transparency
+        draw_rectangle(
+            min_x,
+            min_y,
+            max_x - min_x,
+            max_y - min_y,
+            Color::from_rgba(100, 150, 255, 30),
+        );
+
+        // Draw outline
+        draw_rectangle_lines(
+            min_x,
+            min_y,
+            max_x - min_x,
+            max_y - min_y,
+            2.0,
+            Color::from_rgba(100, 150, 255, 200),
+        );
     }
 
     // Disable scissor rectangle to restore normal rendering

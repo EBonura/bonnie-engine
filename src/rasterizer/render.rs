@@ -136,6 +136,39 @@ impl Framebuffer {
             self.draw_line(ox0, oy0, ox1, oy1, color);
         }
     }
+
+    /// Draw a rectangle outline from (x0, y0) to (x1, y1)
+    pub fn draw_rect(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: Color) {
+        // Normalize coordinates
+        let (min_x, max_x) = if x0 < x1 { (x0, x1) } else { (x1, x0) };
+        let (min_y, max_y) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
+
+        // Draw four edges
+        self.draw_line(min_x, min_y, max_x, min_y, color); // Top
+        self.draw_line(max_x, min_y, max_x, max_y, color); // Right
+        self.draw_line(max_x, max_y, min_x, max_y, color); // Bottom
+        self.draw_line(min_x, max_y, min_x, min_y, color); // Left
+    }
+
+    /// Draw a filled rectangle from (x0, y0) to (x1, y1) with semi-transparent color
+    pub fn draw_filled_rect(&mut self, x0: i32, y0: i32, x1: i32, y1: i32, color: Color) {
+        // Normalize coordinates
+        let (min_x, max_x) = if x0 < x1 { (x0, x1) } else { (x1, x0) };
+        let (min_y, max_y) = if y0 < y1 { (y0, y1) } else { (y1, y0) };
+
+        // Clamp to framebuffer bounds
+        let min_x = min_x.max(0);
+        let min_y = min_y.max(0);
+        let max_x = max_x.min(self.width as i32 - 1);
+        let max_y = max_y.min(self.height as i32 - 1);
+
+        // Fill rectangle
+        for y in min_y..=max_y {
+            for x in min_x..=max_x {
+                self.set_pixel(x as usize, y as usize, color);
+            }
+        }
+    }
 }
 
 /// Camera state

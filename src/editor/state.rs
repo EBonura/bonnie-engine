@@ -100,6 +100,13 @@ pub struct EditorState {
     /// Current selection
     pub selection: Selection,
 
+    /// Multi-selection (for selecting multiple faces/vertices/edges)
+    pub multi_selection: Vec<Selection>,
+
+    /// Selection rectangle state (for drag-to-select)
+    pub selection_rect_start: Option<(f32, f32)>, // Start position in viewport coords
+    pub selection_rect_end: Option<(f32, f32)>,   // End position in viewport coords
+
     /// Currently selected room index (for editing)
     pub current_room: usize,
 
@@ -176,6 +183,9 @@ impl EditorState {
             current_file: None,
             tool: EditorTool::Select,
             selection: Selection::None,
+            multi_selection: Vec::new(),
+            selection_rect_start: None,
+            selection_rect_end: None,
             current_room: 0,
             selected_texture: crate::world::TextureRef::none(),
             camera_3d,
@@ -294,5 +304,53 @@ impl EditorState {
             .get(self.selected_pack)
             .map(|p| p.name.as_str())
             .unwrap_or("(none)")
+    }
+
+    /// Check if a selection is in the multi-selection list
+    pub fn is_multi_selected(&self, selection: &Selection) -> bool {
+        self.multi_selection.iter().any(|s| match (s, selection) {
+            (Selection::Face { room: r1, face: f1 }, Selection::Face { room: r2, face: f2 }) => {
+                r1 == r2 && f1 == f2
+            }
+            (Selection::Vertex { room: r1, vertex: v1 }, Selection::Vertex { room: r2, vertex: v2 }) => {
+                r1 == r2 && v1 == v2
+            }
+            (Selection::Edge { room: r1, v0: v0_1, v1: v1_1 }, Selection::Edge { room: r2, v0: v0_2, v1: v1_2 }) => {
+                r1 == r2 && v0_1 == v0_2 && v1_1 == v1_2
+            }
+            _ => false,
+        })
+    }
+
+    /// Add a selection to the multi-selection list (if not already present)
+    pub fn add_to_multi_selection(&mut self, selection: Selection) {
+        if !matches!(selection, Selection::None) && !self.is_multi_selected(&selection) {
+            self.multi_selection.push(selection);
+        }
+    }
+
+    /// Clear multi-selection
+    pub fn clear_multi_selection(&mut self) {
+        self.multi_selection.clear();
+    }
+
+    /// Toggle a selection in the multi-selection list
+    pub fn toggle_multi_selection(&mut self, selection: Selection) {
+        if let Some(pos) = self.multi_selection.iter().position(|s| match (s, &selection) {
+            (Selection::Face { room: r1, face: f1 }, Selection::Face { room: r2, face: f2 }) => {
+                r1 == r2 && f1 == f2
+            }
+            (Selection::Vertex { room: r1, vertex: v1 }, Selection::Vertex { room: r2, vertex: v2 }) => {
+                r1 == r2 && v1 == v2
+            }
+            (Selection::Edge { room: r1, v0: v0_1, v1: v1_1 }, Selection::Edge { room: r2, v0: v0_2, v1: v1_2 }) => {
+                r1 == r2 && v0_1 == v0_2 && v1_1 == v1_2
+            }
+            _ => false,
+        }) {
+            self.multi_selection.remove(pos);
+        } else if !matches!(selection, Selection::None) {
+            self.multi_selection.push(selection);
+        }
     }
 }

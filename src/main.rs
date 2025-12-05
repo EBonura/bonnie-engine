@@ -128,6 +128,18 @@ async fn main() {
     // XMB state
     let mut xmb_state = xmb::XMBState::new();
 
+    // Load XMB font (VT323 for CRT terminal aesthetic)
+    let xmb_font = match load_ttf_font("assets/fonts/VT323-Regular.ttf").await {
+        Ok(font) => {
+            println!("Loaded VT323 font");
+            Some(font)
+        }
+        Err(e) => {
+            println!("Failed to load VT323 font: {}, using default", e);
+            None
+        }
+    };
+
     // Editor state - track the file we loaded from
     let initial_file = if std::path::Path::new("assets/levels/test.ron").exists() {
         Some(PathBuf::from("assets/levels/test.ron"))
@@ -208,7 +220,7 @@ async fn main() {
 
                 // Render XMB directly to screen (crisp text at any resolution)
                 clear_background(BLACK);
-                xmb::draw_xmb(&xmb_state);
+                xmb::draw_xmb_with_font(&xmb_state, xmb_font.clone());
             }
 
             AppMode::Game => {
