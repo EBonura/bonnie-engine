@@ -191,10 +191,11 @@ pub fn draw_viewport_3d(
                 // Accumulate delta into the unsnapped drag plane Y
                 state.viewport_drag_plane_y += y_delta;
 
-                // Update vertex Y position (NO snapping during drag - smooth movement)
+                // Update vertex Y position with snapping during drag
                 if let Some(room) = state.level.rooms.get_mut(room_idx) {
                     if let Some(v) = room.vertices.get_mut(vert_idx) {
-                        v.y = state.viewport_drag_plane_y;
+                        // Snap to CLICK_HEIGHT grid while dragging
+                        v.y = (state.viewport_drag_plane_y / CLICK_HEIGHT).round() * CLICK_HEIGHT;
                     }
                 }
             }

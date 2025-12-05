@@ -380,6 +380,9 @@ fn draw_properties(_ctx: &mut UiContext, rect: Rect, state: &mut EditorState) {
         super::Selection::Vertex { room, vertex } => {
             draw_text(&format!("Vertex {} in Room {}", vertex, room), x, (y + 14.0).floor(), 16.0, WHITE);
         }
+        super::Selection::Edge { room, v0, v1 } => {
+            draw_text(&format!("Edge {}-{} in Room {}", v0, v1, room), x, (y + 14.0).floor(), 16.0, WHITE);
+        }
         super::Selection::Portal { room, portal } => {
             draw_text(&format!("Portal {} in Room {}", portal, room), x, (y + 14.0).floor(), 16.0, WHITE);
         }

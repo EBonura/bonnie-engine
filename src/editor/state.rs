@@ -80,8 +80,9 @@ pub enum EditorTool {
 pub enum Selection {
     None,
     Room(usize),
-    Face { room: usize, face: usize },
     Vertex { room: usize, vertex: usize },
+    Edge { room: usize, v0: usize, v1: usize },  // Edge defined by two vertex indices
+    Face { room: usize, face: usize },
     Portal { room: usize, portal: usize },
 }
 
