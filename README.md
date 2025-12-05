@@ -47,14 +47,15 @@ This project uses the following free texture packs:
 - **Low Poly 64x64 Textures** by PhobicPaul
   https://phobicpaul.itch.io/low-poly-64x64-textures
 
-- **Ugly 64x64 Textures/Sprites Pack** by OpenGameArt
-  https://opengameart.org/content/ugly-64x64-texturesprites-pack
-
 - **Quake-Like Texture Pack** by Level Eleven Games
   https://level-eleven-games.itch.io/quake-like-texture-pack
 
 - **Dark Fantasy Townhouse 64x64 Texture Pack** by Level Eleven Games
   https://level-eleven-games.itch.io/dark-fantasy-townhouse-64x64-texture-pack
+
+## Acknowledgments
+
+The software rasterizer is based on [tipsy](https://github.com/nkanaev/tipsy), a minimal PS1-style software renderer written in C99 by nkanaev.
 
 ## License
 
