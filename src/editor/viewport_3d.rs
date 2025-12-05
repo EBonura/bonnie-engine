@@ -412,6 +412,98 @@ pub fn draw_viewport_3d(
                 }
             }
             } // end of if state.tool == EditorTool::Select
+            else if state.tool == EditorTool::DrawFloor || state.tool == EditorTool::DrawCeiling {
+                // Cast ray from camera through mouse click to find where to place floor/ceiling
+                if let Some((mouse_fb_x, mouse_fb_y)) = screen_to_fb(mouse_pos.0, mouse_pos.1) {
+                    // Get camera basis vectors
+                    let camera_pos = state.camera_3d.position;
+                    let basis_x = state.camera_3d.basis_x;
+                    let basis_y = state.camera_3d.basis_y;
+                    let basis_z = state.camera_3d.basis_z;
+
+                    // Convert mouse position to normalized screen coordinates (-1 to 1)
+                    let fb_width = fb.width as f32;
+                    let fb_height = fb.height as f32;
+                    let norm_x = (mouse_fb_x / fb_width) * 2.0 - 1.0;
+                    let norm_y = (mouse_fb_y / fb_height) * 2.0 - 1.0;
+
+                    // Construct ray direction (reverse of projection)
+                    const SCALE: f32 = 0.75;
+                    let vs = (fb.width.min(fb.height) as f32 / 2.0) * SCALE;
+                    let ud = 5.0;
+                    let us = ud - 1.0;
+
+                    // Ray direction in camera space
+                    let ray_cam_x = norm_x * (fb_width / 2.0) / vs * us;
+                    let ray_cam_y = norm_y * (fb_height / 2.0) / vs * us;
+                    let ray_cam_z = us;
+
+                    // Transform ray to world space
+                    let ray_dir = Vec3::new(
+                        ray_cam_x * basis_x.x + ray_cam_y * basis_y.x + ray_cam_z * basis_z.x,
+                        ray_cam_x * basis_x.y + ray_cam_y * basis_y.y + ray_cam_z * basis_z.y,
+                        ray_cam_x * basis_x.z + ray_cam_y * basis_y.z + ray_cam_z * basis_z.z,
+                    ).normalize();
+
+                    // Determine target plane height
+                    let target_y = if state.tool == EditorTool::DrawFloor {
+                        0.0
+                    } else {
+                        1024.0 // Ceiling height
+                    };
+
+                    // Intersect ray with horizontal plane at target_y
+                    // Plane equation: y = target_y
+                    // Ray: P = camera_pos + t * ray_dir
+                    // At intersection: camera_pos.y + t * ray_dir.y = target_y
+                    // Solve for t: t = (target_y - camera_pos.y) / ray_dir.y
+
+                    if ray_dir.y.abs() > 0.001 { // Check ray isn't parallel to plane
+                        let t = (target_y - camera_pos.y) / ray_dir.y;
+
+                        if t > 0.0 { // Ray points toward plane (not behind camera)
+                            let intersection = Vec3::new(
+                                camera_pos.x + t * ray_dir.x,
+                                target_y,
+                                camera_pos.z + t * ray_dir.z,
+                            );
+
+                            // Snap to TRLE sector grid
+                            use super::SECTOR_SIZE;
+                            let snapped_x = (intersection.x / SECTOR_SIZE).floor() * SECTOR_SIZE;
+                            let snapped_z = (intersection.z / SECTOR_SIZE).floor() * SECTOR_SIZE;
+
+                            // Create floor or ceiling sector
+                            state.save_undo();
+                            if let Some(room) = state.level.rooms.get_mut(state.current_room) {
+                                use crate::world::FaceType;
+
+                                if state.tool == EditorTool::DrawFloor {
+                                    // Add floor sector vertices
+                                    let v0 = room.add_vertex(snapped_x, target_y, snapped_z);
+                                    let v1 = room.add_vertex(snapped_x, target_y, snapped_z + SECTOR_SIZE);
+                                    let v2 = room.add_vertex(snapped_x + SECTOR_SIZE, target_y, snapped_z + SECTOR_SIZE);
+                                    let v3 = room.add_vertex(snapped_x + SECTOR_SIZE, target_y, snapped_z);
+
+                                    room.add_quad_textured(v0, v1, v2, v3, state.selected_texture.clone(), FaceType::Floor);
+                                    room.recalculate_bounds();
+                                    state.set_status("Created floor sector", 2.0);
+                                } else {
+                                    // Add ceiling sector vertices (reversed winding)
+                                    let v0 = room.add_vertex(snapped_x, target_y, snapped_z);
+                                    let v1 = room.add_vertex(snapped_x + SECTOR_SIZE, target_y, snapped_z);
+                                    let v2 = room.add_vertex(snapped_x + SECTOR_SIZE, target_y, snapped_z + SECTOR_SIZE);
+                                    let v3 = room.add_vertex(snapped_x, target_y, snapped_z + SECTOR_SIZE);
+
+                                    room.add_quad_textured(v0, v1, v2, v3, state.selected_texture.clone(), FaceType::Ceiling);
+                                    room.recalculate_bounds();
+                                    state.set_status("Created ceiling sector", 2.0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Continue dragging (Y-axis only in 3D view - TRLE constraint)
