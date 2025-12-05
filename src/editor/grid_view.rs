@@ -355,22 +355,48 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                         let snapped_x = (wx / SECTOR_SIZE).floor() * SECTOR_SIZE;
                         let snapped_z = (wz / SECTOR_SIZE).floor() * SECTOR_SIZE;
 
-                        // Create a new floor quad (1 sector = 1024x1024)
-                        state.save_undo();
-                        if let Some(room) = state.level.rooms.get_mut(current_room_idx) {
-                            use crate::world::FaceType;
+                        use crate::world::FaceType;
 
-                            // Add 4 vertices for the floor quad
-                            let v0 = room.add_vertex(snapped_x, 0.0, snapped_z);
-                            let v1 = room.add_vertex(snapped_x, 0.0, snapped_z + SECTOR_SIZE);
-                            let v2 = room.add_vertex(snapped_x + SECTOR_SIZE, 0.0, snapped_z + SECTOR_SIZE);
-                            let v3 = room.add_vertex(snapped_x + SECTOR_SIZE, 0.0, snapped_z);
+                        // Check if a floor already exists at this sector position
+                        let sector_occupied = if let Some(room) = state.level.rooms.get(current_room_idx) {
+                            room.faces.iter().any(|face| {
+                                if face.face_type != FaceType::Floor {
+                                    return false;
+                                }
 
-                            // Add the floor face with current texture
-                            room.add_quad_textured(v0, v1, v2, v3, state.selected_texture.clone(), FaceType::Floor);
-                            room.recalculate_bounds();
+                                let num_verts = if face.is_triangle { 3 } else { 4 };
+                                for i in 0..num_verts {
+                                    let v = room.vertices[face.indices[i]];
+                                    const EPSILON: f32 = 1.0;
+                                    if v.x >= snapped_x - EPSILON && v.x < snapped_x + SECTOR_SIZE + EPSILON &&
+                                       v.z >= snapped_z - EPSILON && v.z < snapped_z + SECTOR_SIZE + EPSILON {
+                                        return true;
+                                    }
+                                }
+                                false
+                            })
+                        } else {
+                            false
+                        };
 
-                            state.set_status("Created floor sector", 2.0);
+                        if sector_occupied {
+                            state.set_status("Sector already has a floor", 2.0);
+                        } else {
+                            state.save_undo();
+
+                            if let Some(room) = state.level.rooms.get_mut(current_room_idx) {
+                                // Add 4 vertices for the floor quad
+                                let v0 = room.add_vertex(snapped_x, 0.0, snapped_z);
+                                let v1 = room.add_vertex(snapped_x, 0.0, snapped_z + SECTOR_SIZE);
+                                let v2 = room.add_vertex(snapped_x + SECTOR_SIZE, 0.0, snapped_z + SECTOR_SIZE);
+                                let v3 = room.add_vertex(snapped_x + SECTOR_SIZE, 0.0, snapped_z);
+
+                                // Add the floor face with current texture
+                                room.add_quad_textured(v0, v1, v2, v3, state.selected_texture.clone(), FaceType::Floor);
+                                room.recalculate_bounds();
+
+                                state.set_status("Created floor sector", 2.0);
+                            }
                         }
                     }
                 }
@@ -385,24 +411,50 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                         let snapped_x = (wx / SECTOR_SIZE).floor() * SECTOR_SIZE;
                         let snapped_z = (wz / SECTOR_SIZE).floor() * SECTOR_SIZE;
 
-                        // Create a new ceiling quad at standard height (4 clicks = 1024 units)
-                        state.save_undo();
-                        if let Some(room) = state.level.rooms.get_mut(current_room_idx) {
-                            use crate::world::FaceType;
+                        use crate::world::FaceType;
 
-                            let ceiling_height = 1024.0; // 4 clicks
+                        // Check if a ceiling already exists at this sector position
+                        let sector_occupied = if let Some(room) = state.level.rooms.get(current_room_idx) {
+                            room.faces.iter().any(|face| {
+                                if face.face_type != FaceType::Ceiling {
+                                    return false;
+                                }
 
-                            // Add 4 vertices for the ceiling quad (reversed winding for downward-facing normal)
-                            let v0 = room.add_vertex(snapped_x, ceiling_height, snapped_z);
-                            let v1 = room.add_vertex(snapped_x + SECTOR_SIZE, ceiling_height, snapped_z);
-                            let v2 = room.add_vertex(snapped_x + SECTOR_SIZE, ceiling_height, snapped_z + SECTOR_SIZE);
-                            let v3 = room.add_vertex(snapped_x, ceiling_height, snapped_z + SECTOR_SIZE);
+                                let num_verts = if face.is_triangle { 3 } else { 4 };
+                                for i in 0..num_verts {
+                                    let v = room.vertices[face.indices[i]];
+                                    const EPSILON: f32 = 1.0;
+                                    if v.x >= snapped_x - EPSILON && v.x < snapped_x + SECTOR_SIZE + EPSILON &&
+                                       v.z >= snapped_z - EPSILON && v.z < snapped_z + SECTOR_SIZE + EPSILON {
+                                        return true;
+                                    }
+                                }
+                                false
+                            })
+                        } else {
+                            false
+                        };
 
-                            // Add the ceiling face with current texture
-                            room.add_quad_textured(v0, v1, v2, v3, state.selected_texture.clone(), FaceType::Ceiling);
-                            room.recalculate_bounds();
+                        if sector_occupied {
+                            state.set_status("Sector already has a ceiling", 2.0);
+                        } else {
+                            state.save_undo();
 
-                            state.set_status("Created ceiling sector", 2.0);
+                            if let Some(room) = state.level.rooms.get_mut(current_room_idx) {
+                                let ceiling_height = 1024.0; // 4 clicks
+
+                                // Add 4 vertices for the ceiling quad (reversed winding for downward-facing normal)
+                                let v0 = room.add_vertex(snapped_x, ceiling_height, snapped_z);
+                                let v1 = room.add_vertex(snapped_x + SECTOR_SIZE, ceiling_height, snapped_z);
+                                let v2 = room.add_vertex(snapped_x + SECTOR_SIZE, ceiling_height, snapped_z + SECTOR_SIZE);
+                                let v3 = room.add_vertex(snapped_x, ceiling_height, snapped_z + SECTOR_SIZE);
+
+                                // Add the ceiling face with current texture
+                                room.add_quad_textured(v0, v1, v2, v3, state.selected_texture.clone(), FaceType::Ceiling);
+                                room.recalculate_bounds();
+
+                                state.set_status("Created ceiling sector", 2.0);
+                            }
                         }
                     }
                 }

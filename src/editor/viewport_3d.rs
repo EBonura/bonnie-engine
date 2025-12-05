@@ -473,30 +473,69 @@ pub fn draw_viewport_3d(
                     if let Some((snapped_x, snapped_z, dist)) = closest_sector {
                         // Only place if mouse is reasonably close (within ~50 pixels)
                         if dist < 100.0 {
-                            state.save_undo();
-                            if let Some(room) = state.level.rooms.get_mut(state.current_room) {
-                                use crate::world::FaceType;
+                            use crate::world::FaceType;
 
-                                if state.tool == EditorTool::DrawFloor {
-                                    // Add floor sector vertices
-                                    let v0 = room.add_vertex(snapped_x, target_y, snapped_z);
-                                    let v1 = room.add_vertex(snapped_x, target_y, snapped_z + SECTOR_SIZE);
-                                    let v2 = room.add_vertex(snapped_x + SECTOR_SIZE, target_y, snapped_z + SECTOR_SIZE);
-                                    let v3 = room.add_vertex(snapped_x + SECTOR_SIZE, target_y, snapped_z);
+                            let face_type = if state.tool == EditorTool::DrawFloor {
+                                FaceType::Floor
+                            } else {
+                                FaceType::Ceiling
+                            };
 
-                                    room.add_quad_textured(v0, v1, v2, v3, state.selected_texture.clone(), FaceType::Floor);
-                                    room.recalculate_bounds();
-                                    state.set_status("Created floor sector", 2.0);
-                                } else {
-                                    // Add ceiling sector vertices (reversed winding)
-                                    let v0 = room.add_vertex(snapped_x, target_y, snapped_z);
-                                    let v1 = room.add_vertex(snapped_x + SECTOR_SIZE, target_y, snapped_z);
-                                    let v2 = room.add_vertex(snapped_x + SECTOR_SIZE, target_y, snapped_z + SECTOR_SIZE);
-                                    let v3 = room.add_vertex(snapped_x, target_y, snapped_z + SECTOR_SIZE);
+                            // Check if a floor/ceiling already exists at this sector position
+                            let sector_occupied = if let Some(room) = state.level.rooms.get(state.current_room) {
+                                room.faces.iter().any(|face| {
+                                    // Only check faces of the same type
+                                    if face.face_type != face_type {
+                                        return false;
+                                    }
 
-                                    room.add_quad_textured(v0, v1, v2, v3, state.selected_texture.clone(), FaceType::Ceiling);
-                                    room.recalculate_bounds();
-                                    state.set_status("Created ceiling sector", 2.0);
+                                    // Get all vertices of this face
+                                    let num_verts = if face.is_triangle { 3 } else { 4 };
+                                    for i in 0..num_verts {
+                                        let v = room.vertices[face.indices[i]];
+
+                                        // Check if this vertex is within the sector we're trying to place
+                                        // A sector occupies [x, x+1024] x [z, z+1024]
+                                        const EPSILON: f32 = 1.0;
+                                        if v.x >= snapped_x - EPSILON && v.x < snapped_x + SECTOR_SIZE + EPSILON &&
+                                           v.z >= snapped_z - EPSILON && v.z < snapped_z + SECTOR_SIZE + EPSILON {
+                                            return true;
+                                        }
+                                    }
+                                    false
+                                })
+                            } else {
+                                false
+                            };
+
+                            if sector_occupied {
+                                let type_name = if face_type == FaceType::Floor { "floor" } else { "ceiling" };
+                                state.set_status(&format!("Sector already has a {}", type_name), 2.0);
+                            } else {
+                                state.save_undo();
+
+                                if let Some(room) = state.level.rooms.get_mut(state.current_room) {
+                                    if state.tool == EditorTool::DrawFloor {
+                                        // Add floor sector vertices
+                                        let v0 = room.add_vertex(snapped_x, target_y, snapped_z);
+                                        let v1 = room.add_vertex(snapped_x, target_y, snapped_z + SECTOR_SIZE);
+                                        let v2 = room.add_vertex(snapped_x + SECTOR_SIZE, target_y, snapped_z + SECTOR_SIZE);
+                                        let v3 = room.add_vertex(snapped_x + SECTOR_SIZE, target_y, snapped_z);
+
+                                        room.add_quad_textured(v0, v1, v2, v3, state.selected_texture.clone(), FaceType::Floor);
+                                        room.recalculate_bounds();
+                                        state.set_status("Created floor sector", 2.0);
+                                    } else {
+                                        // Add ceiling sector vertices (reversed winding)
+                                        let v0 = room.add_vertex(snapped_x, target_y, snapped_z);
+                                        let v1 = room.add_vertex(snapped_x + SECTOR_SIZE, target_y, snapped_z);
+                                        let v2 = room.add_vertex(snapped_x + SECTOR_SIZE, target_y, snapped_z + SECTOR_SIZE);
+                                        let v3 = room.add_vertex(snapped_x, target_y, snapped_z + SECTOR_SIZE);
+
+                                        room.add_quad_textured(v0, v1, v2, v3, state.selected_texture.clone(), FaceType::Ceiling);
+                                        room.recalculate_bounds();
+                                        state.set_status("Created ceiling sector", 2.0);
+                                    }
                                 }
                             }
                         }
