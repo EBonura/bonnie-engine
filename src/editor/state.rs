@@ -151,7 +151,9 @@ pub struct EditorState {
 impl EditorState {
     pub fn new(level: Level) -> Self {
         let mut camera_3d = Camera::new();
-        camera_3d.position = Vec3::new(0.0, 5.0, -10.0);
+        // Position camera for TRLE-sized geometry (1024 units)
+        // Start at center of first sector, looking down at it
+        camera_3d.position = Vec3::new(512.0, 2048.0, -512.0);
 
         // Discover all texture packs
         let texture_packs = TexturePack::discover_all();
@@ -170,7 +172,7 @@ impl EditorState {
             camera_3d,
             grid_offset_x: 0.0,
             grid_offset_y: 0.0,
-            grid_zoom: 20.0, // Pixels per world unit
+            grid_zoom: 0.2, // Pixels per world unit (lower = more zoomed out for TRLE scale)
             grid_size: SECTOR_SIZE, // TRLE sector size
             show_grid: true,
             undo_stack: Vec::new(),

@@ -195,45 +195,71 @@ pub fn draw_viewport_3d(
         // Continue dragging
         if ctx.mouse.left_down {
             if let Some((room_idx, vert_idx)) = state.viewport_dragging_vertex {
-                if let Some((fb_x, fb_y)) = screen_to_fb(mouse_pos.0, mouse_pos.1) {
-                    // Cast ray from camera through mouse position
-                    let (ray_origin, ray_dir) = screen_to_ray(
-                        fb_x,
-                        fb_y,
-                        fb.width,
-                        fb.height,
-                        state.camera_3d.position,
-                        state.camera_3d.basis_x,
-                        state.camera_3d.basis_y,
-                        state.camera_3d.basis_z,
-                    );
+                // Check if Shift is held for vertical dragging
+                let shift_held = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
 
-                    // Intersect with horizontal plane at vertex's Y height
-                    if let Some(hit_pos) = ray_plane_intersect(ray_origin, ray_dir, state.viewport_drag_plane_y) {
-                        // Save undo on first actual movement
-                        if !state.viewport_drag_started {
-                            state.save_undo();
-                            state.viewport_drag_started = true;
+                if shift_held {
+                    // Vertical dragging (Y-axis) - use mouse Y movement
+                    if !state.viewport_drag_started {
+                        state.save_undo();
+                        state.viewport_drag_started = true;
+                    }
+
+                    // Calculate Y delta from mouse movement (inverted: down = negative Y)
+                    let mouse_delta_y = state.viewport_last_mouse.1 - mouse_pos.1;
+                    let y_sensitivity = 2.0; // Pixels per world unit
+                    let y_delta = mouse_delta_y * y_sensitivity;
+
+                    // Update vertex Y position
+                    if let Some(room) = state.level.rooms.get_mut(room_idx) {
+                        if let Some(v) = room.vertices.get_mut(vert_idx) {
+                            // Apply delta and snap to CLICK_HEIGHT (256 units)
+                            let new_y = v.y + y_delta;
+                            v.y = (new_y / CLICK_HEIGHT).round() * CLICK_HEIGHT;
                         }
+                    }
+                } else {
+                    // Horizontal dragging (X-Z plane)
+                    if let Some((fb_x, fb_y)) = screen_to_fb(mouse_pos.0, mouse_pos.1) {
+                        // Cast ray from camera through mouse position
+                        let (ray_origin, ray_dir) = screen_to_ray(
+                            fb_x,
+                            fb_y,
+                            fb.width,
+                            fb.height,
+                            state.camera_3d.position,
+                            state.camera_3d.basis_x,
+                            state.camera_3d.basis_y,
+                            state.camera_3d.basis_z,
+                        );
 
-                        // Get room position offset
-                        let room_pos = state.level.rooms.get(room_idx)
-                            .map(|r| r.position)
-                            .unwrap_or(Vec3::new(0.0, 0.0, 0.0));
+                        // Intersect with horizontal plane at vertex's Y height
+                        if let Some(hit_pos) = ray_plane_intersect(ray_origin, ray_dir, state.viewport_drag_plane_y) {
+                            // Save undo on first actual movement
+                            if !state.viewport_drag_started {
+                                state.save_undo();
+                                state.viewport_drag_started = true;
+                            }
 
-                        // Calculate new vertex position (local to room)
-                        let new_x = hit_pos.x - room_pos.x;
-                        let new_z = hit_pos.z - room_pos.z;
+                            // Get room position offset
+                            let room_pos = state.level.rooms.get(room_idx)
+                                .map(|r| r.position)
+                                .unwrap_or(Vec3::new(0.0, 0.0, 0.0));
 
-                        // Snap to TRLE sector grid (1024 units)
-                        let snapped_x = (new_x / SECTOR_SIZE).round() * SECTOR_SIZE;
-                        let snapped_z = (new_z / SECTOR_SIZE).round() * SECTOR_SIZE;
+                            // Calculate new vertex position (local to room)
+                            let new_x = hit_pos.x - room_pos.x;
+                            let new_z = hit_pos.z - room_pos.z;
 
-                        // Update vertex position
-                        if let Some(room) = state.level.rooms.get_mut(room_idx) {
-                            if let Some(v) = room.vertices.get_mut(vert_idx) {
-                                v.x = snapped_x;
-                                v.z = snapped_z;
+                            // Snap to TRLE sector grid (1024 units)
+                            let snapped_x = (new_x / SECTOR_SIZE).round() * SECTOR_SIZE;
+                            let snapped_z = (new_z / SECTOR_SIZE).round() * SECTOR_SIZE;
+
+                            // Update vertex position
+                            if let Some(room) = state.level.rooms.get_mut(room_idx) {
+                                if let Some(v) = room.vertices.get_mut(vert_idx) {
+                                    v.x = snapped_x;
+                                    v.z = snapped_z;
+                                }
                             }
                         }
                     }
