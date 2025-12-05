@@ -432,9 +432,9 @@ pub fn create_empty_level() -> Level {
     let f2 = room0.add_vertex(1024.0, 0.0, 1024.0);
     let f3 = room0.add_vertex(1024.0, 0.0, 0.0);
 
-    // Floor face with SAMPLE texture (first texture in SAMPLE pack)
-    // If SAMPLE pack doesn't exist or texture doesn't exist, will fall back to checkerboard
-    let texture = TextureRef::new("SAMPLE", "floor_stone_grey_broken");
+    // Floor face with retro texture pack
+    // If pack doesn't exist or texture doesn't exist, will fall back to checkerboard
+    let texture = TextureRef::new("retro-texture-pack", "FLOOR_1A");
     room0.add_quad_textured(f0, f1, f2, f3, texture, FaceType::Floor);
 
     room0.recalculate_bounds();
