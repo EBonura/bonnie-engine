@@ -388,7 +388,12 @@ fn draw_properties(_ctx: &mut UiContext, rect: Rect, state: &mut EditorState) {
 
             if let Some(r) = state.level.rooms.get(*room) {
                 if let Some(f) = r.faces.get(*face) {
-                    draw_text(&format!("Texture: {}", f.texture_id), x, (y + 14.0).floor(), 16.0, WHITE);
+                    let tex_display = if f.texture.is_valid() {
+                        format!("{}/{}", f.texture.pack, f.texture.name)
+                    } else {
+                        String::from("(none)")
+                    };
+                    draw_text(&format!("Texture: {}", tex_display), x, (y + 14.0).floor(), 16.0, WHITE);
                     y += line_height;
                     draw_text(&format!("Triangle: {}", f.is_triangle), x, (y + 14.0).floor(), 16.0, WHITE);
                     y += line_height;
@@ -411,7 +416,12 @@ fn draw_properties(_ctx: &mut UiContext, rect: Rect, state: &mut EditorState) {
     y = (rect.y + 100.0).floor();
     draw_text("Selected Texture:", x, (y + 14.0).floor(), 16.0, Color::from_rgba(150, 150, 150, 255));
     y += line_height;
-    draw_text(&format!("ID: {}", state.selected_texture), x, (y + 14.0).floor(), 16.0, WHITE);
+    let tex_display = if state.selected_texture.is_valid() {
+        format!("{}/{}", state.selected_texture.pack, state.selected_texture.name)
+    } else {
+        String::from("(none)")
+    };
+    draw_text(&tex_display, x, (y + 14.0).floor(), 16.0, WHITE);
 }
 
 fn draw_status_bar(rect: Rect, state: &EditorState) {

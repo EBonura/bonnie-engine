@@ -103,8 +103,8 @@ pub struct EditorState {
     /// Currently selected room index (for editing)
     pub current_room: usize,
 
-    /// Selected texture index
-    pub selected_texture: usize,
+    /// Selected texture reference (pack + name)
+    pub selected_texture: crate::world::TextureRef,
 
     /// 3D viewport camera
     pub camera_3d: Camera,
@@ -177,7 +177,7 @@ impl EditorState {
             tool: EditorTool::Select,
             selection: Selection::None,
             current_room: 0,
-            selected_texture: 0,
+            selected_texture: crate::world::TextureRef::none(),
             camera_3d,
             grid_offset_x: 0.0,
             grid_offset_y: 0.0,

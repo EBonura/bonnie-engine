@@ -85,9 +85,9 @@ pub fn draw_texture_palette(
     }
 
     // Track clicked texture to update after loop
-    let mut clicked_texture: Option<usize> = None;
+    let mut clicked_texture: Option<crate::world::TextureRef> = None;
     let selected_pack = state.selected_pack;
-    let selected_texture = state.selected_texture;
+    let selected_texture = &state.selected_texture;
     let texture_scroll = state.texture_scroll;
 
     // Draw texture grid by index to avoid borrowing issues
@@ -105,26 +105,26 @@ pub fn draw_texture_palette(
 
         let thumb_rect = Rect::new(x, y, THUMB_SIZE, THUMB_SIZE);
 
-        // Check for click (only if fully visible)
-        if y >= content_rect.y && y + THUMB_SIZE <= content_rect.bottom() {
-            if ctx.mouse.clicked(&thumb_rect) {
-                clicked_texture = Some(i);
-            }
-        }
-
         // Clip drawing to content area
         if y < content_rect.y {
             continue; // Skip partial textures at top
         }
 
-        // Get texture from pack
-        let texture = match state.texture_packs.get(selected_pack) {
+        // Get texture and pack from state
+        let (texture, pack_name) = match state.texture_packs.get(selected_pack) {
             Some(pack) => match pack.textures.get(i) {
-                Some(tex) => tex,
+                Some(tex) => (tex, &pack.name),
                 None => continue,
             },
             None => continue,
         };
+
+        // Check for click (only if fully visible)
+        if y >= content_rect.y && y + THUMB_SIZE <= content_rect.bottom() {
+            if ctx.mouse.clicked(&thumb_rect) {
+                clicked_texture = Some(crate::world::TextureRef::new(pack_name.clone(), texture.name.clone()));
+            }
+        }
 
         // Draw texture thumbnail
         let mq_texture = raster_to_mq_texture(texture);
@@ -139,8 +139,13 @@ pub fn draw_texture_palette(
             },
         );
 
+        // Check if this texture is selected
+        let is_selected = selected_texture.is_valid()
+            && selected_texture.pack == *pack_name
+            && selected_texture.name == texture.name;
+
         // Selection highlight
-        if i == selected_texture {
+        if is_selected {
             draw_rectangle_lines(
                 x - 2.0,
                 y - 2.0,
@@ -152,7 +157,7 @@ pub fn draw_texture_palette(
         }
 
         // Hover highlight
-        if ctx.mouse.inside(&thumb_rect) && i != selected_texture {
+        if ctx.mouse.inside(&thumb_rect) && !is_selected {
             draw_rectangle_lines(
                 x - 1.0,
                 y - 1.0,
@@ -174,8 +179,8 @@ pub fn draw_texture_palette(
     }
 
     // Apply clicked texture after loop
-    if let Some(idx) = clicked_texture {
-        state.selected_texture = idx;
+    if let Some(tex_ref) = clicked_texture {
+        state.selected_texture = tex_ref;
     }
 }
 
@@ -206,7 +211,7 @@ fn draw_folder_selector(ctx: &mut UiContext, rect: Rect, state: &mut EditorState
     draw_text("<", (prev_rect.x + 6.0).floor(), (prev_rect.y + 14.0).floor(), 16.0, WHITE);
     if ctx.mouse.clicked(&prev_rect) && state.selected_pack > 0 {
         state.selected_pack -= 1;
-        state.selected_texture = 0;
+        state.selected_texture = crate::world::TextureRef::none();
         state.texture_scroll = 0.0;
     }
 
@@ -227,7 +232,7 @@ fn draw_folder_selector(ctx: &mut UiContext, rect: Rect, state: &mut EditorState
     draw_text(">", (next_rect.x + 6.0).floor(), (next_rect.y + 14.0).floor(), 16.0, WHITE);
     if ctx.mouse.clicked(&next_rect) && state.selected_pack < state.texture_packs.len() - 1 {
         state.selected_pack += 1;
-        state.selected_texture = 0;
+        state.selected_texture = crate::world::TextureRef::none();
         state.texture_scroll = 0.0;
     }
 

@@ -329,11 +329,11 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                 state.selection = Selection::Face { room: current_room_idx, face: fi };
 
                 // Apply selected texture to face
-                let texture_id = state.selected_texture;
+                let texture_ref = state.selected_texture.clone();
                 state.save_undo();
                 if let Some(room) = state.level.rooms.get_mut(current_room_idx) {
                     if let Some(face) = room.faces.get_mut(fi) {
-                        face.texture_id = texture_id;
+                        face.texture = texture_ref;
                     }
                 }
             } else {

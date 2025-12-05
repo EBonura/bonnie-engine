@@ -54,8 +54,24 @@ fn render_level(
     camera: &Camera,
     settings: &RasterSettings,
 ) {
+    // Build a texture map from (pack, name) -> index
+    // For the simple game mode (not editor), we only have one "pack" - the SAMPLE directory
+    let texture_map: std::collections::HashMap<(String, String), usize> = textures
+        .iter()
+        .enumerate()
+        .map(|(idx, tex)| ((String::from("SAMPLE"), tex.name.clone()), idx))
+        .collect();
+
+    // Texture resolver closure
+    let resolve_texture = |tex_ref: &world::TextureRef| -> Option<usize> {
+        if !tex_ref.is_valid() {
+            return Some(0); // Fallback to first texture (checkerboard)
+        }
+        texture_map.get(&(tex_ref.pack.clone(), tex_ref.name.clone())).copied()
+    };
+
     for room in &level.rooms {
-        let (vertices, faces) = room.to_render_data();
+        let (vertices, faces) = room.to_render_data_with_textures(&resolve_texture);
         render_mesh(fb, &vertices, &faces, textures, camera, settings);
     }
 }

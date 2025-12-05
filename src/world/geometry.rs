@@ -6,6 +6,43 @@
 use serde::{Serialize, Deserialize};
 use crate::rasterizer::{Vec3, Vec2, Vertex, Face as RasterFace};
 
+/// Texture reference by pack and name
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TextureRef {
+    /// Texture pack name (e.g., "SAMPLE")
+    pub pack: String,
+    /// Texture name without extension (e.g., "floor_01")
+    pub name: String,
+}
+
+impl TextureRef {
+    pub fn new(pack: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            pack: pack.into(),
+            name: name.into(),
+        }
+    }
+
+    /// Create a None reference (uses fallback checkerboard)
+    pub fn none() -> Self {
+        Self {
+            pack: String::new(),
+            name: String::new(),
+        }
+    }
+
+    /// Check if this is a valid reference
+    pub fn is_valid(&self) -> bool {
+        !self.pack.is_empty() && !self.name.is_empty()
+    }
+}
+
+impl Default for TextureRef {
+    fn default() -> Self {
+        Self::none()
+    }
+}
+
 /// Type of face (for TRLE-style editing)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FaceType {
@@ -60,8 +97,8 @@ pub struct Face {
     pub indices: [usize; 4],
     /// True if this is a triangle (only 3 unique vertices)
     pub is_triangle: bool,
-    /// Texture/material ID
-    pub texture_id: usize,
+    /// Texture reference (pack + name)
+    pub texture: TextureRef,
     /// Render both sides (for thin walls, etc.)
     pub double_sided: bool,
     /// Type of face (Floor, Ceiling, or Wall)
@@ -69,23 +106,34 @@ pub struct Face {
 }
 
 impl Face {
-    /// Create a quad face
-    pub fn quad(v0: usize, v1: usize, v2: usize, v3: usize, texture_id: usize, face_type: FaceType) -> Self {
+    /// Create a quad face with no texture
+    pub fn quad(v0: usize, v1: usize, v2: usize, v3: usize, face_type: FaceType) -> Self {
         Self {
             indices: [v0, v1, v2, v3],
             is_triangle: false,
-            texture_id,
+            texture: TextureRef::none(),
+            double_sided: false,
+            face_type,
+        }
+    }
+
+    /// Create a quad face with texture
+    pub fn quad_textured(v0: usize, v1: usize, v2: usize, v3: usize, texture: TextureRef, face_type: FaceType) -> Self {
+        Self {
+            indices: [v0, v1, v2, v3],
+            is_triangle: false,
+            texture,
             double_sided: false,
             face_type,
         }
     }
 
     /// Create a triangle face
-    pub fn tri(v0: usize, v1: usize, v2: usize, texture_id: usize, face_type: FaceType) -> Self {
+    pub fn tri(v0: usize, v1: usize, v2: usize, texture: TextureRef, face_type: FaceType) -> Self {
         Self {
             indices: [v0, v1, v2, v2], // Duplicate last vertex for uniform handling
             is_triangle: true,
-            texture_id,
+            texture,
             double_sided: false,
             face_type,
         }
@@ -178,14 +226,19 @@ impl Room {
         self.vertices.len() - 1
     }
 
-    /// Add a quad face
-    pub fn add_quad(&mut self, v0: usize, v1: usize, v2: usize, v3: usize, texture_id: usize, face_type: FaceType) {
-        self.faces.push(Face::quad(v0, v1, v2, v3, texture_id, face_type));
+    /// Add a quad face with no texture
+    pub fn add_quad(&mut self, v0: usize, v1: usize, v2: usize, v3: usize, face_type: FaceType) {
+        self.faces.push(Face::quad(v0, v1, v2, v3, face_type));
+    }
+
+    /// Add a quad face with texture
+    pub fn add_quad_textured(&mut self, v0: usize, v1: usize, v2: usize, v3: usize, texture: TextureRef, face_type: FaceType) {
+        self.faces.push(Face::quad_textured(v0, v1, v2, v3, texture, face_type));
     }
 
     /// Add a triangle face
-    pub fn add_tri(&mut self, v0: usize, v1: usize, v2: usize, texture_id: usize, face_type: FaceType) {
-        self.faces.push(Face::tri(v0, v1, v2, texture_id, face_type));
+    pub fn add_tri(&mut self, v0: usize, v1: usize, v2: usize, texture: TextureRef, face_type: FaceType) {
+        self.faces.push(Face::tri(v0, v1, v2, texture, face_type));
     }
 
     /// Add a portal to another room
@@ -239,7 +292,13 @@ impl Room {
 
     /// Convert room geometry to rasterizer format (vertices + faces)
     /// Returns world-space vertices ready for rendering
-    pub fn to_render_data(&self) -> (Vec<Vertex>, Vec<RasterFace>) {
+    ///
+    /// Resolves texture references to indices in the provided texture array
+    /// Returns (vertices, faces) with resolved texture indices
+    pub fn to_render_data_with_textures<F>(&self, resolve_texture: F) -> (Vec<Vertex>, Vec<RasterFace>)
+    where
+        F: Fn(&TextureRef) -> Option<usize>,
+    {
         let mut vertices = Vec::with_capacity(self.faces.len() * 4);
         let mut faces = Vec::with_capacity(self.faces.len() * 2);
 
@@ -269,11 +328,14 @@ impl Room {
             vertices.push(Vertex::new(world_v2, Vec2::new(1.0, 1.0), normal));
             vertices.push(Vertex::new(world_v3, Vec2::new(0.0, 1.0), normal));
 
+            // Resolve texture reference to index
+            let texture_id = resolve_texture(&face.texture).unwrap_or(0);
+
             // Create two triangles for the quad
-            faces.push(RasterFace::with_texture(base_idx, base_idx + 1, base_idx + 2, face.texture_id));
+            faces.push(RasterFace::with_texture(base_idx, base_idx + 1, base_idx + 2, texture_id));
 
             if !face.is_triangle {
-                faces.push(RasterFace::with_texture(base_idx, base_idx + 2, base_idx + 3, face.texture_id));
+                faces.push(RasterFace::with_texture(base_idx, base_idx + 2, base_idx + 3, texture_id));
             }
         }
 
@@ -369,8 +431,10 @@ pub fn create_empty_level() -> Level {
     let f2 = room0.add_vertex(1024.0, 0.0, 1024.0);
     let f3 = room0.add_vertex(0.0, 0.0, 1024.0);
 
-    // Floor face
-    room0.add_quad(f0, f1, f2, f3, 0, FaceType::Floor);
+    // Floor face with SAMPLE texture (first texture in SAMPLE pack)
+    // If SAMPLE pack doesn't exist or texture doesn't exist, will fall back to checkerboard
+    let texture = TextureRef::new("SAMPLE", "floor_stone_grey_broken");
+    room0.add_quad_textured(f0, f1, f2, f3, texture, FaceType::Floor);
 
     room0.recalculate_bounds();
     level.rooms.push(room0);
@@ -399,20 +463,20 @@ pub fn create_test_level() -> Level {
     let c3 = room0.add_vertex(0.0, 1024.0, 1024.0);
 
     // Floor
-    room0.add_quad(f0, f1, f2, f3, 0, FaceType::Floor);
+    room0.add_quad(f0, f1, f2, f3, FaceType::Floor);
 
     // Ceiling
-    room0.add_quad(c3, c2, c1, c0, 0, FaceType::Ceiling);
+    room0.add_quad(c3, c2, c1, c0, FaceType::Ceiling);
 
     // Four walls
     // Wall at Z=0 (-Z side)
-    room0.add_quad(f0, c0, c1, f1, 0, FaceType::Wall);
+    room0.add_quad(f0, c0, c1, f1, FaceType::Wall);
     // Wall at X=0 (-X side)
-    room0.add_quad(f3, c3, c0, f0, 0, FaceType::Wall);
+    room0.add_quad(f3, c3, c0, f0, FaceType::Wall);
     // Wall at X=1024 (+X side)
-    room0.add_quad(f1, c1, c2, f2, 0, FaceType::Wall);
+    room0.add_quad(f1, c1, c2, f2, FaceType::Wall);
     // Wall at Z=1024 (+Z side)
-    room0.add_quad(f2, c2, c3, f3, 0, FaceType::Wall);
+    room0.add_quad(f2, c2, c3, f3, FaceType::Wall);
 
     room0.recalculate_bounds();
     level.add_room(room0);

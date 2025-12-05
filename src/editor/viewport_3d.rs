@@ -537,9 +537,27 @@ pub fn draw_viewport_3d(
         }
     }
 
+    // Build texture map from texture packs
+    let mut texture_map: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
+    let mut texture_idx = 0;
+    for pack in &state.texture_packs {
+        for tex in &pack.textures {
+            texture_map.insert((pack.name.clone(), tex.name.clone()), texture_idx);
+            texture_idx += 1;
+        }
+    }
+
+    // Texture resolver closure
+    let resolve_texture = |tex_ref: &crate::world::TextureRef| -> Option<usize> {
+        if !tex_ref.is_valid() {
+            return Some(0); // Fallback to first texture
+        }
+        texture_map.get(&(tex_ref.pack.clone(), tex_ref.name.clone())).copied()
+    };
+
     // Render all rooms
     for room in &state.level.rooms {
-        let (vertices, faces) = room.to_render_data();
+        let (vertices, faces) = room.to_render_data_with_textures(&resolve_texture);
         render_mesh(fb, &vertices, &faces, textures, &state.camera_3d, settings);
     }
 
