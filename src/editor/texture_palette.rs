@@ -180,7 +180,17 @@ pub fn draw_texture_palette(
 
     // Apply clicked texture after loop
     if let Some(tex_ref) = clicked_texture {
-        state.selected_texture = tex_ref;
+        state.selected_texture = tex_ref.clone();
+
+        // If a face is selected, apply the texture to it immediately
+        if let super::Selection::Face { room, face } = state.selection {
+            state.save_undo();
+            if let Some(r) = state.level.rooms.get_mut(room) {
+                if let Some(f) = r.faces.get_mut(face) {
+                    f.texture = tex_ref;
+                }
+            }
+        }
     }
 }
 

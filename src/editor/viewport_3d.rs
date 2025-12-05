@@ -376,6 +376,13 @@ pub fn draw_viewport_3d(
                 // Select face
                 state.selection = Selection::Face { room: room_idx, face: face_idx };
 
+                // Auto-select the face's texture in the texture palette
+                if let Some(room) = state.level.rooms.get(room_idx) {
+                    if let Some(face) = room.faces.get(face_idx) {
+                        state.selected_texture = face.texture.clone();
+                    }
+                }
+
                 // Allow dragging for all face types now that we preserve relative heights
                 if let Some(room) = state.level.rooms.get(room_idx) {
                     if let Some(face) = room.faces.get(face_idx) {

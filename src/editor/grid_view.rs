@@ -325,15 +325,13 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
                 state.grid_dragging_vertex = Some(vi);
                 state.grid_drag_started = false;
             } else if let Some(fi) = hovered_face {
-                // Face clicked - select it and apply texture
+                // Face clicked - select it and auto-select its texture
                 state.selection = Selection::Face { room: current_room_idx, face: fi };
 
-                // Apply selected texture to face
-                let texture_ref = state.selected_texture.clone();
-                state.save_undo();
-                if let Some(room) = state.level.rooms.get_mut(current_room_idx) {
-                    if let Some(face) = room.faces.get_mut(fi) {
-                        face.texture = texture_ref;
+                // Auto-select the face's texture in the texture palette
+                if let Some(room) = state.level.rooms.get(current_room_idx) {
+                    if let Some(face) = room.faces.get(fi) {
+                        state.selected_texture = face.texture.clone();
                     }
                 }
             } else {
