@@ -262,12 +262,7 @@ fn draw_toolbar(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) {
 
     for (label, tool) in tools {
         let is_active = state.tool == tool;
-        // Highlight active tool
-        if is_active {
-            let btn_rect = Rect::new(toolbar.cursor_x(), rect.y + 2.0, 50.0, rect.h - 4.0);
-            draw_rectangle(btn_rect.x, btn_rect.y, btn_rect.w, btn_rect.h, Color::from_rgba(80, 100, 140, 255));
-        }
-        if toolbar.button(ctx, label, 50.0) {
+        if toolbar.button_with_active(ctx, label, 50.0, is_active) {
             state.tool = tool;
         }
     }

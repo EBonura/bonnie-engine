@@ -313,7 +313,12 @@ pub fn draw_viewport_3d(
     if inside_viewport && !ctx.mouse.right_down {
         // Start dragging or select on left press
         if ctx.mouse.left_pressed {
-            if let Some((room_idx, vert_idx, _)) = hovered_vertex {
+            use crate::editor::EditorTool;
+
+            // Only handle selection/dragging in Select mode
+            // Drawing tools don't work in 3D view (use 2D grid view instead)
+            if state.tool == EditorTool::Select {
+                if let Some((room_idx, vert_idx, _)) = hovered_vertex {
                 // Select and start dragging this vertex
                 state.selection = Selection::Vertex { room: room_idx, vertex: vert_idx };
 
@@ -406,6 +411,7 @@ pub fn draw_viewport_3d(
                     }
                 }
             }
+            } // end of if state.tool == EditorTool::Select
         }
 
         // Continue dragging (Y-axis only in 3D view - TRLE constraint)

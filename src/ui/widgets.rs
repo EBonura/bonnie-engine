@@ -180,6 +180,25 @@ impl Toolbar {
         button(ctx, btn_rect, label)
     }
 
+    /// Add a button with active state highlighting
+    pub fn button_with_active(&mut self, ctx: &mut UiContext, label: &str, width: f32, is_active: bool) -> bool {
+        let btn_rect = Rect::new(self.cursor_x, self.rect.y + 2.0, width, self.rect.h - 4.0);
+        self.cursor_x += width + self.spacing;
+
+        if is_active {
+            // Use active colors when this button represents the current state
+            let colors = WidgetColors {
+                normal: Color::from_rgba(70, 90, 120, 255),
+                hover: Color::from_rgba(80, 100, 140, 255),
+                active: Color::from_rgba(100, 120, 160, 255),
+                text: WHITE,
+            };
+            button_styled(ctx, btn_rect, label, &colors)
+        } else {
+            button(ctx, btn_rect, label)
+        }
+    }
+
     /// Add a separator
     pub fn separator(&mut self) {
         self.cursor_x += self.spacing * 2.0;
