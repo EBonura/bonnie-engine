@@ -245,9 +245,19 @@ fn draw_pattern_view(ctx: &mut UiContext, rect: Rect, state: &mut TrackerState) 
         draw_line(x - 1.0, rect.y, x - 1.0, rect.y + rect.h, 1.0, Color::new(0.25, 0.25, 0.3, 1.0));
     }
 
-    // Handle mouse clicks on pattern grid
+    // Handle mouse clicks and scrolling on pattern grid
     let grid_y_start = rect.y + ROW_HEIGHT;
     let grid_rect = Rect::new(rect.x, grid_y_start, rect.w, rect.h - ROW_HEIGHT);
+
+    // Mouse wheel scrolling
+    if ctx.mouse.inside(&grid_rect) {
+        let scroll = mouse_wheel().1;
+        if scroll != 0.0 {
+            let scroll_amount = if scroll > 0.0 { -4 } else { 4 }; // Scroll 4 rows at a time
+            let new_scroll = (state.scroll_row as i32 + scroll_amount).max(0) as usize;
+            state.scroll_row = new_scroll.min(pattern_length.saturating_sub(state.visible_rows));
+        }
+    }
 
     if ctx.mouse.inside(&grid_rect) && is_mouse_button_pressed(MouseButton::Left) {
         let mouse_x = ctx.mouse.x;
@@ -661,8 +671,8 @@ fn handle_input(_ctx: &mut UiContext, state: &mut TrackerState) {
         state.delete_note();
     }
 
-    // Note entry (when in edit mode and in note column)
-    if state.edit_mode && state.current_column == 0 {
+    // Note entry (only in Pattern view, when in edit mode and in note column)
+    if state.view == TrackerView::Pattern && state.edit_mode && state.current_column == 0 {
         // Check for note keys
         let note_keys = [
             KeyCode::Z, KeyCode::S, KeyCode::X, KeyCode::D, KeyCode::C,
@@ -684,6 +694,32 @@ fn handle_input(_ctx: &mut UiContext, state: &mut TrackerState) {
         // Note off with period or backtick
         if is_key_pressed(KeyCode::Period) || is_key_pressed(KeyCode::Apostrophe) {
             state.enter_note_off();
+        }
+    }
+
+    // In Instruments view, allow keyboard to preview sounds without entering notes
+    if state.view == TrackerView::Instruments {
+        let note_keys = [
+            KeyCode::Z, KeyCode::S, KeyCode::X, KeyCode::D, KeyCode::C,
+            KeyCode::V, KeyCode::G, KeyCode::B, KeyCode::H, KeyCode::N,
+            KeyCode::J, KeyCode::M,
+            KeyCode::Q, KeyCode::Key2, KeyCode::W, KeyCode::Key3, KeyCode::E,
+            KeyCode::R, KeyCode::Key5, KeyCode::T, KeyCode::Key6, KeyCode::Y,
+            KeyCode::Key7, KeyCode::U,
+        ];
+
+        for key in note_keys {
+            if is_key_pressed(key) {
+                if let Some(pitch) = TrackerState::key_to_note(key, state.octave) {
+                    // Just preview the sound, don't enter into pattern
+                    state.audio.note_on(state.current_channel as i32, pitch as i32, 100);
+                }
+            }
+            if is_key_released(key) {
+                if let Some(pitch) = TrackerState::key_to_note(key, state.octave) {
+                    state.audio.note_off(state.current_channel as i32, pitch as i32);
+                }
+            }
         }
     }
 }
