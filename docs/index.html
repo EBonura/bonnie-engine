@@ -196,12 +196,19 @@
         var AudioOutput = {
             ctx: null,
             sampleRate: 44100,
-            pendingBuffers: [],
-            isPlaying: false,
             nextStartTime: 0,
+            // Ring buffer for accumulating samples
+            ringBuffer: { left: null, right: null, writePos: 0, size: 8192 },
+            // Minimum samples to buffer before scheduling (reduces crackling)
+            minBufferSamples: 2048,
+            // Track if we have active sound
+            hasActiveSound: false,
+            silenceFrames: 0,
 
             init: function(sampleRate) {
                 AudioOutput.sampleRate = sampleRate;
+                AudioOutput.ringBuffer.left = new Float32Array(AudioOutput.ringBuffer.size);
+                AudioOutput.ringBuffer.right = new Float32Array(AudioOutput.ringBuffer.size);
                 console.log('Audio output initialized, sample rate:', sampleRate);
             },
 
@@ -229,18 +236,11 @@
                 var ctx = AudioOutput.ensureContext();
                 if (!ctx) return;
 
-                var now = ctx.currentTime;
-
-                // Don't queue too far ahead (max 100ms buffer)
-                if (AudioOutput.nextStartTime > now + 0.1) {
-                    return; // Already have enough buffered
-                }
-
-                // Copy samples from WASM memory (must copy, not view, as memory may move)
+                // Copy samples from WASM memory
                 var leftView = new Float32Array(wasm_exports.memory.buffer, leftPtr, len);
                 var rightView = new Float32Array(wasm_exports.memory.buffer, rightPtr, len);
 
-                // Check if there's any non-zero audio (skip silence)
+                // Check if there's any non-zero audio
                 var hasAudio = false;
                 for (var i = 0; i < len; i += 32) {
                     if (Math.abs(leftView[i]) > 0.0001 || Math.abs(rightView[i]) > 0.0001) {
@@ -250,16 +250,43 @@
                 }
 
                 if (!hasAudio) {
-                    // Reset scheduling when silent so next sound plays immediately
-                    AudioOutput.nextStartTime = now;
+                    AudioOutput.silenceFrames++;
+                    // After ~10 frames of silence, reset for immediate playback
+                    if (AudioOutput.silenceFrames > 10) {
+                        AudioOutput.nextStartTime = 0;
+                        AudioOutput.ringBuffer.writePos = 0;
+                        AudioOutput.hasActiveSound = false;
+                    }
                     return;
                 }
 
-                // Copy the data
-                var leftData = new Float32Array(len);
-                var rightData = new Float32Array(len);
-                leftData.set(leftView);
-                rightData.set(rightView);
+                AudioOutput.silenceFrames = 0;
+                AudioOutput.hasActiveSound = true;
+
+                // Accumulate samples into ring buffer
+                var rb = AudioOutput.ringBuffer;
+                for (var i = 0; i < len; i++) {
+                    rb.left[rb.writePos] = leftView[i];
+                    rb.right[rb.writePos] = rightView[i];
+                    rb.writePos++;
+
+                    // When we have enough samples, schedule a chunk
+                    if (rb.writePos >= AudioOutput.minBufferSamples) {
+                        AudioOutput.scheduleChunk(rb.left.slice(0, rb.writePos), rb.right.slice(0, rb.writePos));
+                        rb.writePos = 0;
+                    }
+                }
+            },
+
+            scheduleChunk: function(leftData, rightData) {
+                var ctx = AudioOutput.ctx;
+                var now = ctx.currentTime;
+                var len = leftData.length;
+
+                // Don't queue too far ahead (max 150ms buffer for smooth playback)
+                if (AudioOutput.nextStartTime > now + 0.15) {
+                    return;
+                }
 
                 // Create and schedule audio buffer
                 var buffer = ctx.createBuffer(2, len, AudioOutput.sampleRate);
@@ -271,8 +298,9 @@
                 source.connect(ctx.destination);
 
                 // Schedule seamlessly after previous buffer
+                // Add a tiny overlap to prevent gaps
                 if (AudioOutput.nextStartTime < now) {
-                    AudioOutput.nextStartTime = now;
+                    AudioOutput.nextStartTime = now + 0.01; // 10ms initial latency
                 }
                 source.start(AudioOutput.nextStartTime);
                 AudioOutput.nextStartTime += buffer.duration;
