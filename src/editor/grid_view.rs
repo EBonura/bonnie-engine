@@ -74,10 +74,17 @@ pub fn draw_grid_view(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) 
     };
 
     // Enable scissor rectangle to clip drawing to viewport bounds
+    // Scissor uses physical pixels, so scale by DPI
+    let dpi = screen_dpi_scale();
     gl_use_default_material();
     unsafe {
         get_internal_gl().quad_gl.scissor(
-            Some((rect.x as i32, rect.y as i32, rect.w as i32, rect.h as i32))
+            Some((
+                (rect.x * dpi) as i32,
+                (rect.y * dpi) as i32,
+                (rect.w * dpi) as i32,
+                (rect.h * dpi) as i32
+            ))
         );
     }
 
