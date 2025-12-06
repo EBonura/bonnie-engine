@@ -66,286 +66,268 @@
     <canvas id="glcanvas" tabindex="1"></canvas>
     <script src="mq_js_bundle.js"></script>
     <script>
-        document.getElementById('glcanvas').addEventListener('contextmenu', e => e.preventDefault());
+    (function() {
+        'use strict';
 
-        // Bonnie engine file import/export functions
-        // These use native browser localStorage directly
+        // Disable context menu on canvas
+        document.getElementById('glcanvas').addEventListener('contextmenu', function(e) {
+            e.preventDefault();
+        });
 
-        // Import: open file picker and store result in localStorage for Rust to read
-        window.bonnie_import_file = function() {
-            var input = document.createElement('input');
-            input.type = 'file';
-            input.accept = '.ron';
-            input.onchange = function(e) {
-                var file = e.target.files[0];
-                if (file) {
-                    var reader = new FileReader();
-                    reader.onload = function(e) {
-                        localStorage.setItem('_bonnie_import_data', e.target.result);
-                        localStorage.setItem('_bonnie_import_filename', file.name);
-                        localStorage.setItem('_bonnie_import_ready', 'true');
-                        console.log('Import: file loaded into localStorage:', file.name);
-                    };
-                    reader.readAsText(file);
-                }
-            };
-            input.click();
-        };
+        // =============================================================================
+        // WASM Memory Helpers
+        // =============================================================================
 
-        // Download: check localStorage for export data and trigger download
-        // Called from Rust after writing data to localStorage
-        window.bonnie_trigger_download = function() {
-            var data = localStorage.getItem('_bonnie_export_data');
-            var filename = localStorage.getItem('_bonnie_export_filename') || 'level.ron';
-            console.log('bonnie_trigger_download called, data length:', data ? data.length : 0, 'filename:', filename);
-
-            if (data) {
-                var blob = new Blob([data], {type: 'text/plain'});
-                var url = URL.createObjectURL(blob);
-                var a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-
-                // Clear the export data
-                localStorage.removeItem('_bonnie_export_data');
-                localStorage.removeItem('_bonnie_export_filename');
-            }
-        };
-
-        // Set export data in localStorage (called from Rust via quad-storage or direct)
-        window.bonnie_set_export_data = function(ptr, len) {
-            // Read string from WASM memory
-            var bytes = new Uint8Array(wasm_exports.memory.buffer, ptr, len);
-            var data = new TextDecoder().decode(bytes);
-            localStorage.setItem('_bonnie_export_data', data);
-            console.log('bonnie_set_export_data: stored', len, 'bytes');
-        };
-
-        // Set export filename in localStorage
-        window.bonnie_set_export_filename = function(ptr, len) {
-            var bytes = new Uint8Array(wasm_exports.memory.buffer, ptr, len);
-            var filename = new TextDecoder().decode(bytes);
-            localStorage.setItem('_bonnie_export_filename', filename);
-            console.log('bonnie_set_export_filename:', filename);
-        };
-
-        // Check if import is ready
-        // Returns 1 if import ready, 0 if not
-        window.bonnie_check_import = function() {
-            var ready = localStorage.getItem('_bonnie_import_ready');
-            return ready === 'true' ? 1 : 0;
-        };
-
-        // Get the length of imported data (for buffer allocation)
-        window.bonnie_get_import_data_len = function() {
-            var data = localStorage.getItem('_bonnie_import_data') || '';
-            return data.length;
-        };
-
-        // Get the length of imported filename (for buffer allocation)
-        window.bonnie_get_import_filename_len = function() {
-            var filename = localStorage.getItem('_bonnie_import_filename') || '';
-            return filename.length;
-        };
-
-        // Copy imported data to WASM memory buffer
-        window.bonnie_copy_import_data = function(ptr, max_len) {
-            var data = localStorage.getItem('_bonnie_import_data') || '';
-            var len = Math.min(data.length, max_len);
-            var bytes = new TextEncoder().encode(data);
-            var dest = new Uint8Array(wasm_exports.memory.buffer, ptr, len);
-            dest.set(bytes.subarray(0, len));
-            return len;
-        };
-
-        // Copy imported filename to WASM memory buffer
-        window.bonnie_copy_import_filename = function(ptr, max_len) {
-            var filename = localStorage.getItem('_bonnie_import_filename') || '';
-            var len = Math.min(filename.length, max_len);
-            var bytes = new TextEncoder().encode(filename);
-            var dest = new Uint8Array(wasm_exports.memory.buffer, ptr, len);
-            dest.set(bytes.subarray(0, len));
-            return len;
-        };
-
-        // Clear the import data (call after successfully reading)
-        window.bonnie_clear_import = function() {
-            localStorage.removeItem('_bonnie_import_ready');
-            localStorage.removeItem('_bonnie_import_data');
-            localStorage.removeItem('_bonnie_import_filename');
-            console.log('bonnie_clear_import: cleared import data');
-        };
-
-        // Loading progress functions
-        window.bonnie_set_loading_progress = function(current, total) {
-            var percent = total > 0 ? (current / total) * 100 : 0;
-            var bar = document.getElementById('loading-bar');
-            if (bar) bar.style.width = percent + '%';
-        };
-
-        window.bonnie_set_loading_status = function(ptr, len) {
-            var bytes = new Uint8Array(wasm_exports.memory.buffer, ptr, len);
-            var status = new TextDecoder().decode(bytes);
-            var el = document.getElementById('loading-status');
-            if (el) el.textContent = status;
-        };
-
-        window.bonnie_hide_loading = function() {
-            var el = document.getElementById('loading');
-            if (el) el.style.display = 'none';
-        };
-
-        // Texture prefetch cache - JavaScript fetches in parallel, WASM reads from cache
-        window.bonnie_texture_cache = {};
-        window.bonnie_prefetch_complete = false;
-        window.bonnie_prefetch_total = 0;
-        window.bonnie_prefetch_loaded = 0;
-
-        // Check if prefetch is complete
-        window.bonnie_is_prefetch_complete = function() {
-            return window.bonnie_prefetch_complete ? 1 : 0;
-        };
-
-        // Get cached texture dimensions (returns width << 16 | height, or 0 if not found)
-        window.bonnie_get_cached_texture_info = function(ptr, path_len) {
-            var bytes = new Uint8Array(wasm_exports.memory.buffer, ptr, path_len);
-            var path = new TextDecoder().decode(bytes);
-            var tex = window.bonnie_texture_cache[path];
-            if (!tex) return 0;
-            // Pack width and height into a single u32: high 16 bits = width, low 16 bits = height
-            return (tex.width << 16) | tex.height;
-        };
-
-        // Copy cached texture RGBA data to WASM memory
-        window.bonnie_copy_cached_texture = function(path_ptr, path_len, dest_ptr, max_len) {
-            var pathBytes = new Uint8Array(wasm_exports.memory.buffer, path_ptr, path_len);
-            var path = new TextDecoder().decode(pathBytes);
-            var tex = window.bonnie_texture_cache[path];
-            if (!tex || !tex.data) return 0;
-            var len = Math.min(tex.data.length, max_len);
-            var dest = new Uint8Array(wasm_exports.memory.buffer, dest_ptr, len);
-            dest.set(tex.data.subarray(0, len));
-            return len;
-        };
-
-        // Decode PNG to raw RGBA using browser's native decoder (much faster than WASM)
-        function decodePngToRgba(blob) {
-            return new Promise(function(resolve, reject) {
-                var img = new Image();
-                img.onload = function() {
-                    var canvas = document.createElement('canvas');
-                    canvas.width = img.width;
-                    canvas.height = img.height;
-                    var ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0);
-                    var imageData = ctx.getImageData(0, 0, img.width, img.height);
-                    // Return width, height, and raw RGBA data
-                    resolve({
-                        width: img.width,
-                        height: img.height,
-                        data: imageData.data // Uint8ClampedArray of RGBA
-                    });
-                    URL.revokeObjectURL(img.src);
-                };
-                img.onerror = function() {
-                    URL.revokeObjectURL(img.src);
-                    reject(new Error('Failed to decode image'));
-                };
-                img.src = URL.createObjectURL(blob);
-            });
+        function readWasmString(ptr, len) {
+            return new TextDecoder().decode(
+                new Uint8Array(wasm_exports.memory.buffer, ptr, len)
+            );
         }
 
-        // Prefetch and decode all textures in parallel before WASM starts
-        async function prefetchTextures() {
-            var statusEl = document.getElementById('loading-status');
-            var barEl = document.getElementById('loading-bar');
+        function writeWasmBytes(ptr, data, maxLen) {
+            var len = Math.min(data.length, maxLen);
+            new Uint8Array(wasm_exports.memory.buffer, ptr, len).set(
+                data.subarray ? data.subarray(0, len) : data.slice(0, len)
+            );
+            return len;
+        }
 
-            if (statusEl) statusEl.textContent = 'Loading manifest...';
+        // =============================================================================
+        // File Import/Export (Level files via localStorage)
+        // =============================================================================
 
-            try {
-                var manifestResponse = await fetch('assets/textures/manifest.txt');
-                var manifest = await manifestResponse.text();
-
-                // Parse manifest to get all texture paths
-                var texturePaths = [];
-                var currentPack = null;
-                manifest.split('\n').forEach(function(line) {
-                    line = line.trim();
-                    if (!line) return;
-                    if (line.startsWith('[') && line.endsWith(']')) {
-                        currentPack = line.slice(1, -1);
-                    } else if (currentPack) {
-                        texturePaths.push('assets/textures/' + currentPack + '/' + line);
+        var FileIO = {
+            import: function() {
+                var input = document.createElement('input');
+                input.type = 'file';
+                input.accept = '.ron';
+                input.onchange = function(e) {
+                    var file = e.target.files[0];
+                    if (file) {
+                        var reader = new FileReader();
+                        reader.onload = function(e) {
+                            localStorage.setItem('_bonnie_import_data', e.target.result);
+                            localStorage.setItem('_bonnie_import_filename', file.name);
+                            localStorage.setItem('_bonnie_import_ready', 'true');
+                        };
+                        reader.readAsText(file);
                     }
-                });
+                };
+                input.click();
+            },
 
-                window.bonnie_prefetch_total = texturePaths.length;
-                if (statusEl) statusEl.textContent = 'Loading ' + texturePaths.length + ' textures...';
+            checkImport: function() {
+                return localStorage.getItem('_bonnie_import_ready') === 'true' ? 1 : 0;
+            },
 
-                // Fetch AND decode all textures in parallel using browser's native PNG decoder
-                var fetchPromises = texturePaths.map(function(path) {
-                    return fetch(path)
-                        .then(function(response) {
-                            if (!response.ok) throw new Error('HTTP ' + response.status);
-                            return response.blob();
-                        })
-                        .then(function(blob) {
-                            return decodePngToRgba(blob);
-                        })
-                        .then(function(decoded) {
-                            // Store decoded RGBA data (no PNG decoding needed in WASM!)
-                            window.bonnie_texture_cache[path] = decoded;
-                            window.bonnie_prefetch_loaded++;
-                            var percent = (window.bonnie_prefetch_loaded / window.bonnie_prefetch_total) * 100;
-                            if (barEl) barEl.style.width = percent + '%';
-                        })
-                        .catch(function(err) {
-                            console.warn('Failed to load:', path, err);
-                            window.bonnie_prefetch_loaded++;
-                        });
-                });
+            getImportDataLen: function() {
+                return (localStorage.getItem('_bonnie_import_data') || '').length;
+            },
 
-                await Promise.all(fetchPromises);
-                window.bonnie_prefetch_complete = true;
-                if (statusEl) statusEl.textContent = 'Starting engine...';
-                console.log('Loaded and decoded', Object.keys(window.bonnie_texture_cache).length, 'textures');
+            getImportFilenameLen: function() {
+                return (localStorage.getItem('_bonnie_import_filename') || '').length;
+            },
 
-            } catch (err) {
-                console.error('Prefetch failed:', err);
-                window.bonnie_prefetch_complete = true; // Continue anyway, WASM will fallback
+            copyImportData: function(ptr, maxLen) {
+                var data = localStorage.getItem('_bonnie_import_data') || '';
+                return writeWasmBytes(ptr, new TextEncoder().encode(data), maxLen);
+            },
+
+            copyImportFilename: function(ptr, maxLen) {
+                var filename = localStorage.getItem('_bonnie_import_filename') || '';
+                return writeWasmBytes(ptr, new TextEncoder().encode(filename), maxLen);
+            },
+
+            clearImport: function() {
+                localStorage.removeItem('_bonnie_import_ready');
+                localStorage.removeItem('_bonnie_import_data');
+                localStorage.removeItem('_bonnie_import_filename');
+            },
+
+            setExportData: function(ptr, len) {
+                localStorage.setItem('_bonnie_export_data', readWasmString(ptr, len));
+            },
+
+            setExportFilename: function(ptr, len) {
+                localStorage.setItem('_bonnie_export_filename', readWasmString(ptr, len));
+            },
+
+            triggerDownload: function() {
+                var data = localStorage.getItem('_bonnie_export_data');
+                var filename = localStorage.getItem('_bonnie_export_filename') || 'level.ron';
+                if (data) {
+                    var a = document.createElement('a');
+                    a.href = URL.createObjectURL(new Blob([data], { type: 'text/plain' }));
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    localStorage.removeItem('_bonnie_export_data');
+                    localStorage.removeItem('_bonnie_export_filename');
+                }
             }
-        }
+        };
 
-        // Register as WASM imports so Rust can call them
+        // =============================================================================
+        // Loading UI
+        // =============================================================================
+
+        var LoadingUI = {
+            setProgress: function(current, total) {
+                var bar = document.getElementById('loading-bar');
+                if (bar) bar.style.width = (total > 0 ? (current / total) * 100 : 0) + '%';
+            },
+
+            setStatus: function(ptr, len) {
+                var el = document.getElementById('loading-status');
+                if (el) el.textContent = readWasmString(ptr, len);
+            },
+
+            hide: function() {
+                var el = document.getElementById('loading');
+                if (el) el.style.display = 'none';
+            }
+        };
+
+        // =============================================================================
+        // Texture Cache (parallel prefetch + native PNG decoding)
+        // =============================================================================
+
+        var TextureCache = {
+            cache: {},
+            complete: false,
+            total: 0,
+            loaded: 0,
+
+            isComplete: function() {
+                return TextureCache.complete ? 1 : 0;
+            },
+
+            getInfo: function(ptr, pathLen) {
+                var tex = TextureCache.cache[readWasmString(ptr, pathLen)];
+                return tex ? (tex.width << 16) | tex.height : 0;
+            },
+
+            copyData: function(pathPtr, pathLen, destPtr, maxLen) {
+                var tex = TextureCache.cache[readWasmString(pathPtr, pathLen)];
+                if (!tex || !tex.data) return 0;
+                return writeWasmBytes(destPtr, tex.data, maxLen);
+            },
+
+            decodePng: function(blob) {
+                return new Promise(function(resolve, reject) {
+                    var img = new Image();
+                    var url = URL.createObjectURL(blob);
+                    img.onload = function() {
+                        var canvas = document.createElement('canvas');
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        var ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0);
+                        resolve({
+                            width: img.width,
+                            height: img.height,
+                            data: ctx.getImageData(0, 0, img.width, img.height).data
+                        });
+                        URL.revokeObjectURL(url);
+                    };
+                    img.onerror = function() {
+                        URL.revokeObjectURL(url);
+                        reject(new Error('Failed to decode image'));
+                    };
+                    img.src = url;
+                });
+            },
+
+            prefetchAll: async function() {
+                var statusEl = document.getElementById('loading-status');
+                var barEl = document.getElementById('loading-bar');
+
+                if (statusEl) statusEl.textContent = 'Loading manifest...';
+
+                try {
+                    var manifest = await (await fetch('assets/textures/manifest.txt')).text();
+
+                    // Parse manifest
+                    var paths = [];
+                    var currentPack = null;
+                    manifest.split('\n').forEach(function(line) {
+                        line = line.trim();
+                        if (!line) return;
+                        if (line[0] === '[' && line[line.length - 1] === ']') {
+                            currentPack = line.slice(1, -1);
+                        } else if (currentPack) {
+                            paths.push('assets/textures/' + currentPack + '/' + line);
+                        }
+                    });
+
+                    TextureCache.total = paths.length;
+                    if (statusEl) statusEl.textContent = 'Loading ' + paths.length + ' textures...';
+
+                    // Fetch and decode all in parallel
+                    await Promise.all(paths.map(function(path) {
+                        return fetch(path)
+                            .then(function(r) { return r.blob(); })
+                            .then(function(blob) { return TextureCache.decodePng(blob); })
+                            .then(function(decoded) {
+                                TextureCache.cache[path] = decoded;
+                                TextureCache.loaded++;
+                                if (barEl) barEl.style.width = (TextureCache.loaded / TextureCache.total * 100) + '%';
+                            })
+                            .catch(function() { TextureCache.loaded++; });
+                    }));
+
+                    TextureCache.complete = true;
+                    if (statusEl) statusEl.textContent = 'Starting engine...';
+
+                } catch (err) {
+                    console.error('Prefetch failed:', err);
+                    TextureCache.complete = true;
+                }
+            }
+        };
+
+        // =============================================================================
+        // Register WASM imports
+        // =============================================================================
+
         miniquad_add_plugin({
             register_plugin: function(importObject) {
-                importObject.env.bonnie_import_file = window.bonnie_import_file;
-                importObject.env.bonnie_check_import = window.bonnie_check_import;
-                importObject.env.bonnie_get_import_data_len = window.bonnie_get_import_data_len;
-                importObject.env.bonnie_get_import_filename_len = window.bonnie_get_import_filename_len;
-                importObject.env.bonnie_copy_import_data = window.bonnie_copy_import_data;
-                importObject.env.bonnie_copy_import_filename = window.bonnie_copy_import_filename;
-                importObject.env.bonnie_clear_import = window.bonnie_clear_import;
-                importObject.env.bonnie_set_export_data = window.bonnie_set_export_data;
-                importObject.env.bonnie_set_export_filename = window.bonnie_set_export_filename;
-                importObject.env.bonnie_trigger_download = window.bonnie_trigger_download;
-                importObject.env.bonnie_set_loading_progress = window.bonnie_set_loading_progress;
-                importObject.env.bonnie_set_loading_status = window.bonnie_set_loading_status;
-                importObject.env.bonnie_hide_loading = window.bonnie_hide_loading;
-                importObject.env.bonnie_is_prefetch_complete = window.bonnie_is_prefetch_complete;
-                importObject.env.bonnie_get_cached_texture_info = window.bonnie_get_cached_texture_info;
-                importObject.env.bonnie_copy_cached_texture = window.bonnie_copy_cached_texture;
+                var env = importObject.env;
+
+                // File I/O
+                env.bonnie_import_file = FileIO.import;
+                env.bonnie_check_import = FileIO.checkImport;
+                env.bonnie_get_import_data_len = FileIO.getImportDataLen;
+                env.bonnie_get_import_filename_len = FileIO.getImportFilenameLen;
+                env.bonnie_copy_import_data = FileIO.copyImportData;
+                env.bonnie_copy_import_filename = FileIO.copyImportFilename;
+                env.bonnie_clear_import = FileIO.clearImport;
+                env.bonnie_set_export_data = FileIO.setExportData;
+                env.bonnie_set_export_filename = FileIO.setExportFilename;
+                env.bonnie_trigger_download = FileIO.triggerDownload;
+
+                // Loading UI
+                env.bonnie_set_loading_progress = LoadingUI.setProgress;
+                env.bonnie_set_loading_status = LoadingUI.setStatus;
+                env.bonnie_hide_loading = LoadingUI.hide;
+
+                // Texture cache
+                env.bonnie_is_prefetch_complete = TextureCache.isComplete;
+                env.bonnie_get_cached_texture_info = TextureCache.getInfo;
+                env.bonnie_copy_cached_texture = TextureCache.copyData;
             }
         });
 
-        // Prefetch textures first, then load WASM
-        prefetchTextures().then(function() {
-            load("bonnie-rs.wasm");
+        // =============================================================================
+        // Startup
+        // =============================================================================
+
+        TextureCache.prefetchAll().then(function() {
+            load('bonnie-rs.wasm');
         });
+
+    })();
     </script>
 </body>
 </html>
