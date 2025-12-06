@@ -22,9 +22,15 @@ class BonnieAudioProcessor extends AudioWorkletProcessor {
     pushSamples(left, right) {
         const len = left.length;
         for (let i = 0; i < len; i++) {
+            // Check for overflow - don't overwrite unread data
+            const nextWrite = (this.writeIndex + 1) & (this.bufferSize - 1);
+            if (nextWrite === this.readIndex) {
+                // Buffer full, drop remaining samples
+                return;
+            }
             this.leftBuffer[this.writeIndex] = left[i];
             this.rightBuffer[this.writeIndex] = right[i];
-            this.writeIndex = (this.writeIndex + 1) & (this.bufferSize - 1);
+            this.writeIndex = nextWrite;
         }
     }
 
