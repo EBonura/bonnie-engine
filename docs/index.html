@@ -199,6 +199,94 @@
             if (el) el.style.display = 'none';
         };
 
+        // Texture prefetch cache - JavaScript fetches in parallel, WASM reads from cache
+        window.bonnie_texture_cache = {};
+        window.bonnie_prefetch_complete = false;
+        window.bonnie_prefetch_total = 0;
+        window.bonnie_prefetch_loaded = 0;
+
+        // Check if prefetch is complete
+        window.bonnie_is_prefetch_complete = function() {
+            return window.bonnie_prefetch_complete ? 1 : 0;
+        };
+
+        // Get cached texture data length
+        window.bonnie_get_cached_texture_len = function(ptr, path_len) {
+            var bytes = new Uint8Array(wasm_exports.memory.buffer, ptr, path_len);
+            var path = new TextDecoder().decode(bytes);
+            var data = window.bonnie_texture_cache[path];
+            return data ? data.byteLength : 0;
+        };
+
+        // Copy cached texture data to WASM memory
+        window.bonnie_copy_cached_texture = function(path_ptr, path_len, dest_ptr, max_len) {
+            var pathBytes = new Uint8Array(wasm_exports.memory.buffer, path_ptr, path_len);
+            var path = new TextDecoder().decode(pathBytes);
+            var data = window.bonnie_texture_cache[path];
+            if (!data) return 0;
+            var len = Math.min(data.byteLength, max_len);
+            var dest = new Uint8Array(wasm_exports.memory.buffer, dest_ptr, len);
+            dest.set(new Uint8Array(data, 0, len));
+            return len;
+        };
+
+        // Prefetch all textures in parallel before WASM starts loading them
+        async function prefetchTextures() {
+            var statusEl = document.getElementById('loading-status');
+            var barEl = document.getElementById('loading-bar');
+
+            if (statusEl) statusEl.textContent = 'Loading manifest...';
+
+            try {
+                var manifestResponse = await fetch('assets/textures/manifest.txt');
+                var manifest = await manifestResponse.text();
+
+                // Parse manifest to get all texture paths
+                var texturePaths = [];
+                var currentPack = null;
+                manifest.split('\n').forEach(function(line) {
+                    line = line.trim();
+                    if (!line) return;
+                    if (line.startsWith('[') && line.endsWith(']')) {
+                        currentPack = line.slice(1, -1);
+                    } else if (currentPack) {
+                        texturePaths.push('assets/textures/' + currentPack + '/' + line);
+                    }
+                });
+
+                window.bonnie_prefetch_total = texturePaths.length;
+                if (statusEl) statusEl.textContent = 'Prefetching ' + texturePaths.length + ' textures...';
+
+                // Fetch all textures in parallel (browser handles connection pooling)
+                var fetchPromises = texturePaths.map(function(path) {
+                    return fetch(path)
+                        .then(function(response) {
+                            if (!response.ok) throw new Error('HTTP ' + response.status);
+                            return response.arrayBuffer();
+                        })
+                        .then(function(buffer) {
+                            window.bonnie_texture_cache[path] = buffer;
+                            window.bonnie_prefetch_loaded++;
+                            var percent = (window.bonnie_prefetch_loaded / window.bonnie_prefetch_total) * 100;
+                            if (barEl) barEl.style.width = percent + '%';
+                        })
+                        .catch(function(err) {
+                            console.warn('Failed to prefetch:', path, err);
+                            window.bonnie_prefetch_loaded++;
+                        });
+                });
+
+                await Promise.all(fetchPromises);
+                window.bonnie_prefetch_complete = true;
+                if (statusEl) statusEl.textContent = 'Starting engine...';
+                console.log('Prefetched', Object.keys(window.bonnie_texture_cache).length, 'textures');
+
+            } catch (err) {
+                console.error('Prefetch failed:', err);
+                window.bonnie_prefetch_complete = true; // Continue anyway, WASM will fallback
+            }
+        }
+
         // Register as WASM imports so Rust can call them
         miniquad_add_plugin({
             register_plugin: function(importObject) {
@@ -215,10 +303,16 @@
                 importObject.env.bonnie_set_loading_progress = window.bonnie_set_loading_progress;
                 importObject.env.bonnie_set_loading_status = window.bonnie_set_loading_status;
                 importObject.env.bonnie_hide_loading = window.bonnie_hide_loading;
+                importObject.env.bonnie_is_prefetch_complete = window.bonnie_is_prefetch_complete;
+                importObject.env.bonnie_get_cached_texture_len = window.bonnie_get_cached_texture_len;
+                importObject.env.bonnie_copy_cached_texture = window.bonnie_copy_cached_texture;
             }
         });
 
-        load("bonnie-rs.wasm");
+        // Prefetch textures first, then load WASM
+        prefetchTextures().then(function() {
+            load("bonnie-rs.wasm");
+        });
     </script>
 </body>
 </html>

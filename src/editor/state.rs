@@ -73,15 +73,16 @@ impl TexturePack {
     }
 
     /// Load texture packs from manifest asynchronously (for WASM)
-    /// Uses parallel loading with futures::join_all for much faster startup
+    /// JavaScript prefetches all textures in parallel, then WASM reads from cache
     pub async fn load_from_manifest() -> Vec<Self> {
         use macroquad::prelude::*;
 
         #[cfg(target_arch = "wasm32")]
         extern "C" {
-            fn bonnie_set_loading_progress(current: u32, total: u32);
             fn bonnie_set_loading_status(ptr: *const u8, len: usize);
             fn bonnie_hide_loading();
+            fn bonnie_get_cached_texture_len(path_ptr: *const u8, path_len: usize) -> usize;
+            fn bonnie_copy_cached_texture(path_ptr: *const u8, path_len: usize, dest_ptr: *mut u8, max_len: usize) -> usize;
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -89,18 +90,10 @@ impl TexturePack {
             unsafe { bonnie_set_loading_status(msg.as_ptr(), msg.len()); }
         }
 
-        #[cfg(target_arch = "wasm32")]
-        fn set_progress(current: u32, total: u32) {
-            unsafe { bonnie_set_loading_progress(current, total); }
-        }
-
         #[cfg(not(target_arch = "wasm32"))]
         fn set_status(_msg: &str) {}
 
-        #[cfg(not(target_arch = "wasm32"))]
-        fn set_progress(_current: u32, _total: u32) {}
-
-        set_status("Loading texture manifest...");
+        set_status("Decoding textures...");
 
         let manifest_path = "assets/textures/manifest.txt";
         let manifest = match load_string(manifest_path).await {
@@ -143,17 +136,11 @@ impl TexturePack {
             }
         }
 
-        // Count total textures
-        let total_textures: u32 = pack_files.iter().map(|(_, files)| files.len() as u32).sum();
-        let mut loaded_count: u32 = 0;
-
-        set_status("Loading textures...");
-
-        // Load textures sequentially (macroquad's async runtime doesn't support parallel futures)
+        // Load textures from JavaScript cache (already prefetched in parallel)
         let mut packs = Vec::new();
 
         for (pack_name, files) in pack_files {
-            set_status(&format!("Loading {}...", pack_name));
+            set_status(&format!("Decoding {}...", pack_name));
 
             let mut textures = Vec::with_capacity(files.len());
 
@@ -164,17 +151,37 @@ impl TexturePack {
                     .unwrap_or(filename)
                     .to_string();
 
-                match load_file(&tex_path).await {
-                    Ok(bytes) => {
-                        match Texture::from_bytes(&bytes, tex_name) {
-                            Ok(tex) => textures.push(tex),
-                            Err(e) => eprintln!("Failed to decode texture: {}", e),
+                // Read from JavaScript cache (instant, already fetched)
+                #[cfg(target_arch = "wasm32")]
+                let bytes_opt = unsafe {
+                    let len = bonnie_get_cached_texture_len(tex_path.as_ptr(), tex_path.len());
+                    if len > 0 {
+                        let mut buffer = vec![0u8; len];
+                        let copied = bonnie_copy_cached_texture(
+                            tex_path.as_ptr(), tex_path.len(),
+                            buffer.as_mut_ptr(), len
+                        );
+                        if copied > 0 {
+                            buffer.truncate(copied);
+                            Some(buffer)
+                        } else {
+                            None
                         }
+                    } else {
+                        None
                     }
-                    Err(e) => eprintln!("Failed to load texture {}: {}", tex_path, e),
+                };
+
+                // Native fallback: use load_file
+                #[cfg(not(target_arch = "wasm32"))]
+                let bytes_opt = load_file(&tex_path).await.ok();
+
+                if let Some(bytes) = bytes_opt {
+                    match Texture::from_bytes(&bytes, tex_name) {
+                        Ok(tex) => textures.push(tex),
+                        Err(e) => eprintln!("Failed to decode texture {}: {}", tex_path, e),
+                    }
                 }
-                loaded_count += 1;
-                set_progress(loaded_count, total_textures);
             }
 
             if !textures.is_empty() {
