@@ -312,7 +312,7 @@ impl TrackerState {
         }
     }
 
-    /// Toggle playback
+    /// Toggle playback from current cursor position
     pub fn toggle_playback(&mut self) {
         self.playing = !self.playing;
         if self.playing {
@@ -324,11 +324,23 @@ impl TrackerState {
         }
     }
 
-    /// Stop playback and return to start
+    /// Start playback from the beginning of the song
+    pub fn play_from_start(&mut self) {
+        self.audio.all_notes_off();
+        self.playback_row = 0;
+        self.playback_pattern_idx = 0;
+        self.playback_time = 0.0;
+        self.playing = true;
+    }
+
+    /// Stop playback and return cursor to start
     pub fn stop_playback(&mut self) {
         self.playing = false;
         self.playback_row = 0;
         self.playback_pattern_idx = 0;
+        self.current_row = 0;
+        self.current_pattern_idx = 0;
+        self.scroll_row = 0;
         self.audio.all_notes_off();
     }
 
