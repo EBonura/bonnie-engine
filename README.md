@@ -31,7 +31,15 @@ Answer the question: **"How would a Souls-like have looked on a PS1?"**
 - **TRLE sector grid** - 1024-unit sectors for precise alignment
 - **Textured geometry** - Multiple texture pack support
 
-### Integrated Level Editor
+### Modern Editor UI
+
+The editor features a MuseScore-inspired interface design:
+
+- **Tab-based navigation** - Fixed tabs for World Editor, Sound Designer, Tracker, and Game preview
+- **Flat icon buttons** - Clean, minimal toolbar with [Lucide](https://lucide.dev/) icons
+- **Cyan accent color** - Active state highlighting inspired by MuseScore 4
+- **Unified toolbar** - All tools accessible in a single row
+- **Tooltips** - Hover hints for all buttons
 
 #### Dual Viewport System
 - **3D Viewport** - Real-time preview with authentic PS1 rendering
@@ -53,16 +61,17 @@ Answer the question: **"How would a Souls-like have looked on a PS1?"**
 - **Vertex Linking** - Move coincident vertices together or independently
 
 #### Texture Management
-- Browse multiple texture packs
-- Search and filter textures
+- Browse multiple texture packs with chevron navigation
+- ~800 textures across 4 included packs
 - Auto-apply textures to new geometry
 - Texture reference system (pack + name)
+- WASM support via build-time manifest generation
 
 #### Workflow Features
 - **Undo/Redo** - Full history for all edits
 - **Cross-platform save/load**
   - Desktop: Native file dialogs
-  - Browser: Import/Export JSON
+  - Browser: Import/Export via download/upload
 - **Live preview** - Test levels with Play button
 - **Status messages** - Contextual feedback for all operations
 
@@ -210,10 +219,20 @@ This project uses the following free texture packs:
 
 - **Engine**: Custom software rasterizer in Rust
 - **UI Framework**: Macroquad for windowing and input
+- **Icon Font**: [Lucide](https://lucide.dev/) for toolbar icons
 - **Level Format**: RON (Rust Object Notation)
 - **Resolution**: 320x240 (4:3 aspect ratio)
 - **Coordinate System**: Y-up, right-handed
 - **Sector Size**: 1024 units (TRLE standard)
+
+### WASM Texture Loading
+
+Since WebAssembly can't enumerate directories at runtime, textures are loaded via a manifest system:
+
+1. `build.rs` scans `assets/textures/` at compile time
+2. Generates `assets/textures/manifest.txt` listing all packs and files
+3. WASM runtime loads textures async from the manifest
+4. Native builds still use direct filesystem enumeration
 
 ## Acknowledgments
 
