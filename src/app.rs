@@ -34,7 +34,7 @@ impl Tool {
             Tool::Home => "Home",
             Tool::WorldEditor => "World Editor",
             Tool::SoundDesigner => "Sound Designer",
-            Tool::Tracker => "Tracker",
+            Tool::Tracker => "Music Editor",
             Tool::Game => "Game",
         }
     }
