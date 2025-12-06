@@ -73,15 +73,17 @@ impl TexturePack {
     }
 
     /// Load texture packs from manifest asynchronously (for WASM)
-    /// JavaScript prefetches all textures in parallel, then WASM reads from cache
+    /// JavaScript prefetches and decodes all textures in parallel, WASM just copies raw RGBA
     pub async fn load_from_manifest() -> Vec<Self> {
         use macroquad::prelude::*;
+        use crate::rasterizer::Color;
 
         #[cfg(target_arch = "wasm32")]
         extern "C" {
             fn bonnie_set_loading_status(ptr: *const u8, len: usize);
             fn bonnie_hide_loading();
-            fn bonnie_get_cached_texture_len(path_ptr: *const u8, path_len: usize) -> usize;
+            // Returns (width << 16) | height, or 0 if not found
+            fn bonnie_get_cached_texture_info(path_ptr: *const u8, path_len: usize) -> u32;
             fn bonnie_copy_cached_texture(path_ptr: *const u8, path_len: usize, dest_ptr: *mut u8, max_len: usize) -> usize;
         }
 
@@ -93,7 +95,7 @@ impl TexturePack {
         #[cfg(not(target_arch = "wasm32"))]
         fn set_status(_msg: &str) {}
 
-        set_status("Decoding textures...");
+        set_status("Loading textures...");
 
         let manifest_path = "assets/textures/manifest.txt";
         let manifest = match load_string(manifest_path).await {
@@ -136,11 +138,11 @@ impl TexturePack {
             }
         }
 
-        // Load textures from JavaScript cache (already prefetched in parallel)
+        // Load textures from JavaScript cache (already decoded to raw RGBA!)
         let mut packs = Vec::new();
 
         for (pack_name, files) in pack_files {
-            set_status(&format!("Decoding {}...", pack_name));
+            set_status(&format!("Loading {}...", pack_name));
 
             let mut textures = Vec::with_capacity(files.len());
 
@@ -151,19 +153,31 @@ impl TexturePack {
                     .unwrap_or(filename)
                     .to_string();
 
-                // Read from JavaScript cache (instant, already fetched)
+                // Read pre-decoded RGBA from JavaScript cache (no PNG decoding needed!)
                 #[cfg(target_arch = "wasm32")]
-                let bytes_opt = unsafe {
-                    let len = bonnie_get_cached_texture_len(tex_path.as_ptr(), tex_path.len());
-                    if len > 0 {
-                        let mut buffer = vec![0u8; len];
+                let texture_opt = unsafe {
+                    let info = bonnie_get_cached_texture_info(tex_path.as_ptr(), tex_path.len());
+                    if info != 0 {
+                        let width = (info >> 16) as usize;
+                        let height = (info & 0xFFFF) as usize;
+                        let rgba_size = width * height * 4;
+                        let mut rgba_buffer = vec![0u8; rgba_size];
                         let copied = bonnie_copy_cached_texture(
                             tex_path.as_ptr(), tex_path.len(),
-                            buffer.as_mut_ptr(), len
+                            rgba_buffer.as_mut_ptr(), rgba_size
                         );
-                        if copied > 0 {
-                            buffer.truncate(copied);
-                            Some(buffer)
+                        if copied == rgba_size {
+                            // Convert raw RGBA bytes directly to Color pixels
+                            let pixels: Vec<Color> = rgba_buffer
+                                .chunks_exact(4)
+                                .map(|c| Color::with_alpha(c[0], c[1], c[2], c[3]))
+                                .collect();
+                            Some(Texture {
+                                width,
+                                height,
+                                pixels,
+                                name: tex_name,
+                            })
                         } else {
                             None
                         }
@@ -172,15 +186,15 @@ impl TexturePack {
                     }
                 };
 
-                // Native fallback: use load_file
+                // Native fallback: use load_file and decode PNG
                 #[cfg(not(target_arch = "wasm32"))]
-                let bytes_opt = load_file(&tex_path).await.ok();
+                let texture_opt = match load_file(&tex_path).await {
+                    Ok(bytes) => Texture::from_bytes(&bytes, tex_name).ok(),
+                    Err(_) => None,
+                };
 
-                if let Some(bytes) = bytes_opt {
-                    match Texture::from_bytes(&bytes, tex_name) {
-                        Ok(tex) => textures.push(tex),
-                        Err(e) => eprintln!("Failed to decode texture {}: {}", tex_path, e),
-                    }
+                if let Some(tex) = texture_opt {
+                    textures.push(tex);
                 }
             }
 

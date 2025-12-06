@@ -210,27 +210,56 @@
             return window.bonnie_prefetch_complete ? 1 : 0;
         };
 
-        // Get cached texture data length
-        window.bonnie_get_cached_texture_len = function(ptr, path_len) {
+        // Get cached texture dimensions (returns width << 16 | height, or 0 if not found)
+        window.bonnie_get_cached_texture_info = function(ptr, path_len) {
             var bytes = new Uint8Array(wasm_exports.memory.buffer, ptr, path_len);
             var path = new TextDecoder().decode(bytes);
-            var data = window.bonnie_texture_cache[path];
-            return data ? data.byteLength : 0;
+            var tex = window.bonnie_texture_cache[path];
+            if (!tex) return 0;
+            // Pack width and height into a single u32: high 16 bits = width, low 16 bits = height
+            return (tex.width << 16) | tex.height;
         };
 
-        // Copy cached texture data to WASM memory
+        // Copy cached texture RGBA data to WASM memory
         window.bonnie_copy_cached_texture = function(path_ptr, path_len, dest_ptr, max_len) {
             var pathBytes = new Uint8Array(wasm_exports.memory.buffer, path_ptr, path_len);
             var path = new TextDecoder().decode(pathBytes);
-            var data = window.bonnie_texture_cache[path];
-            if (!data) return 0;
-            var len = Math.min(data.byteLength, max_len);
+            var tex = window.bonnie_texture_cache[path];
+            if (!tex || !tex.data) return 0;
+            var len = Math.min(tex.data.length, max_len);
             var dest = new Uint8Array(wasm_exports.memory.buffer, dest_ptr, len);
-            dest.set(new Uint8Array(data, 0, len));
+            dest.set(tex.data.subarray(0, len));
             return len;
         };
 
-        // Prefetch all textures in parallel before WASM starts loading them
+        // Decode PNG to raw RGBA using browser's native decoder (much faster than WASM)
+        function decodePngToRgba(blob) {
+            return new Promise(function(resolve, reject) {
+                var img = new Image();
+                img.onload = function() {
+                    var canvas = document.createElement('canvas');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    var ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0);
+                    var imageData = ctx.getImageData(0, 0, img.width, img.height);
+                    // Return width, height, and raw RGBA data
+                    resolve({
+                        width: img.width,
+                        height: img.height,
+                        data: imageData.data // Uint8ClampedArray of RGBA
+                    });
+                    URL.revokeObjectURL(img.src);
+                };
+                img.onerror = function() {
+                    URL.revokeObjectURL(img.src);
+                    reject(new Error('Failed to decode image'));
+                };
+                img.src = URL.createObjectURL(blob);
+            });
+        }
+
+        // Prefetch and decode all textures in parallel before WASM starts
         async function prefetchTextures() {
             var statusEl = document.getElementById('loading-status');
             var barEl = document.getElementById('loading-bar');
@@ -255,23 +284,27 @@
                 });
 
                 window.bonnie_prefetch_total = texturePaths.length;
-                if (statusEl) statusEl.textContent = 'Prefetching ' + texturePaths.length + ' textures...';
+                if (statusEl) statusEl.textContent = 'Loading ' + texturePaths.length + ' textures...';
 
-                // Fetch all textures in parallel (browser handles connection pooling)
+                // Fetch AND decode all textures in parallel using browser's native PNG decoder
                 var fetchPromises = texturePaths.map(function(path) {
                     return fetch(path)
                         .then(function(response) {
                             if (!response.ok) throw new Error('HTTP ' + response.status);
-                            return response.arrayBuffer();
+                            return response.blob();
                         })
-                        .then(function(buffer) {
-                            window.bonnie_texture_cache[path] = buffer;
+                        .then(function(blob) {
+                            return decodePngToRgba(blob);
+                        })
+                        .then(function(decoded) {
+                            // Store decoded RGBA data (no PNG decoding needed in WASM!)
+                            window.bonnie_texture_cache[path] = decoded;
                             window.bonnie_prefetch_loaded++;
                             var percent = (window.bonnie_prefetch_loaded / window.bonnie_prefetch_total) * 100;
                             if (barEl) barEl.style.width = percent + '%';
                         })
                         .catch(function(err) {
-                            console.warn('Failed to prefetch:', path, err);
+                            console.warn('Failed to load:', path, err);
                             window.bonnie_prefetch_loaded++;
                         });
                 });
@@ -279,7 +312,7 @@
                 await Promise.all(fetchPromises);
                 window.bonnie_prefetch_complete = true;
                 if (statusEl) statusEl.textContent = 'Starting engine...';
-                console.log('Prefetched', Object.keys(window.bonnie_texture_cache).length, 'textures');
+                console.log('Loaded and decoded', Object.keys(window.bonnie_texture_cache).length, 'textures');
 
             } catch (err) {
                 console.error('Prefetch failed:', err);
@@ -304,7 +337,7 @@
                 importObject.env.bonnie_set_loading_status = window.bonnie_set_loading_status;
                 importObject.env.bonnie_hide_loading = window.bonnie_hide_loading;
                 importObject.env.bonnie_is_prefetch_complete = window.bonnie_is_prefetch_complete;
-                importObject.env.bonnie_get_cached_texture_len = window.bonnie_get_cached_texture_len;
+                importObject.env.bonnie_get_cached_texture_info = window.bonnie_get_cached_texture_info;
                 importObject.env.bonnie_copy_cached_texture = window.bonnie_copy_cached_texture;
             }
         });
