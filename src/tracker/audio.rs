@@ -1,4 +1,8 @@
 //! Audio engine using rustysynth for SF2 playback
+//!
+//! Platform-specific audio output:
+//! - Native: cpal for direct audio device access
+//! - WASM: Web Audio API via JavaScript FFI
 
 use std::sync::{Arc, Mutex};
 #[cfg(not(target_arch = "wasm32"))]
@@ -6,13 +10,11 @@ use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
 use std::fs::File;
 use rustysynth::{SoundFont, Synthesizer, SynthesizerSettings};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Stream, SampleRate, StreamConfig};
 
 /// Sample rate for audio output
 pub const SAMPLE_RATE: u32 = 44100;
 
-/// Audio engine state shared between main thread and audio thread
+/// Audio engine state shared between main thread and audio callback
 struct AudioState {
     /// The synthesizer
     synth: Option<Synthesizer>,
@@ -20,36 +22,17 @@ struct AudioState {
     playing: bool,
 }
 
-/// The audio engine manages SF2 loading and note playback
-pub struct AudioEngine {
-    /// Shared state with audio thread
-    state: Arc<Mutex<AudioState>>,
-    /// The audio stream (kept alive)
-    _stream: Option<Stream>,
-    /// Loaded soundfont info
-    soundfont_name: Option<String>,
-}
+// =============================================================================
+// Native audio output using cpal
+// =============================================================================
 
-impl AudioEngine {
-    /// Create a new audio engine (no soundfont loaded yet)
-    pub fn new() -> Self {
-        let state = Arc::new(Mutex::new(AudioState {
-            synth: None,
-            playing: false,
-        }));
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
+    use super::*;
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use cpal::{Stream, SampleRate, StreamConfig};
 
-        // Try to initialize audio output
-        let stream = Self::init_audio_stream(Arc::clone(&state));
-
-        Self {
-            state,
-            _stream: stream,
-            soundfont_name: None,
-        }
-    }
-
-    /// Initialize the audio output stream
-    fn init_audio_stream(state: Arc<Mutex<AudioState>>) -> Option<Stream> {
+    pub fn init_audio_stream(state: Arc<Mutex<AudioState>>) -> Option<Stream> {
         let host = cpal::default_host();
         let device = host.default_output_device()?;
 
@@ -59,7 +42,6 @@ impl AudioEngine {
             buffer_size: cpal::BufferSize::Default,
         };
 
-        // Create a buffer for the synthesizer output
         let mut left_buffer = vec![0.0f32; 1024];
         let mut right_buffer = vec![0.0f32; 1024];
 
@@ -69,23 +51,19 @@ impl AudioEngine {
                 let mut state = state.lock().unwrap();
 
                 if let Some(ref mut synth) = state.synth {
-                    // Ensure buffers are large enough
                     let samples_needed = data.len() / 2;
                     if left_buffer.len() < samples_needed {
                         left_buffer.resize(samples_needed, 0.0);
                         right_buffer.resize(samples_needed, 0.0);
                     }
 
-                    // Render audio from synthesizer
                     synth.render(&mut left_buffer[..samples_needed], &mut right_buffer[..samples_needed]);
 
-                    // Interleave stereo output
                     for i in 0..samples_needed {
                         data[i * 2] = left_buffer[i];
                         data[i * 2 + 1] = right_buffer[i];
                     }
                 } else {
-                    // No synth loaded, output silence
                     for sample in data.iter_mut() {
                         *sample = 0.0;
                     }
@@ -97,6 +75,107 @@ impl AudioEngine {
 
         stream.play().ok()?;
         Some(stream)
+    }
+}
+
+// =============================================================================
+// WASM audio output using Web Audio API via JavaScript
+// =============================================================================
+
+#[cfg(target_arch = "wasm32")]
+pub mod wasm {
+    use super::*;
+
+    extern "C" {
+        // Soundfont cache
+        fn bonnie_is_soundfont_loaded() -> i32;
+        fn bonnie_get_soundfont_size() -> usize;
+        fn bonnie_copy_soundfont(dest_ptr: *mut u8, max_len: usize) -> usize;
+        // Audio output
+        fn bonnie_audio_init(sample_rate: u32);
+        fn bonnie_audio_write(left_ptr: *const f32, right_ptr: *const f32, len: usize);
+    }
+
+    pub fn is_soundfont_cached() -> bool {
+        unsafe { bonnie_is_soundfont_loaded() != 0 }
+    }
+
+    pub fn get_cached_soundfont() -> Option<Vec<u8>> {
+        unsafe {
+            let size = bonnie_get_soundfont_size();
+            if size == 0 {
+                return None;
+            }
+
+            let mut buffer = vec![0u8; size];
+            let copied = bonnie_copy_soundfont(buffer.as_mut_ptr(), size);
+
+            if copied != size {
+                return None;
+            }
+
+            Some(buffer)
+        }
+    }
+
+    pub fn init_audio() {
+        unsafe { bonnie_audio_init(SAMPLE_RATE) }
+    }
+
+    pub fn write_audio(left: &[f32], right: &[f32]) {
+        let len = left.len().min(right.len());
+        unsafe { bonnie_audio_write(left.as_ptr(), right.as_ptr(), len) }
+    }
+}
+
+// =============================================================================
+// AudioEngine - cross-platform wrapper
+// =============================================================================
+
+/// The audio engine manages SF2 loading and note playback
+pub struct AudioEngine {
+    /// Shared state
+    state: Arc<Mutex<AudioState>>,
+    /// The audio stream (native only, kept alive)
+    #[cfg(not(target_arch = "wasm32"))]
+    _stream: Option<cpal::Stream>,
+    /// Loaded soundfont info
+    soundfont_name: Option<String>,
+    /// Audio render buffers (WASM only - we render on demand)
+    #[cfg(target_arch = "wasm32")]
+    left_buffer: Vec<f32>,
+    #[cfg(target_arch = "wasm32")]
+    right_buffer: Vec<f32>,
+}
+
+impl AudioEngine {
+    /// Create a new audio engine (no soundfont loaded yet)
+    pub fn new() -> Self {
+        let state = Arc::new(Mutex::new(AudioState {
+            synth: None,
+            playing: false,
+        }));
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let stream = native::init_audio_stream(Arc::clone(&state));
+            Self {
+                state,
+                _stream: stream,
+                soundfont_name: None,
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            wasm::init_audio();
+            Self {
+                state,
+                soundfont_name: None,
+                left_buffer: vec![0.0; 2048],
+                right_buffer: vec![0.0; 2048],
+            }
+        }
     }
 
     /// Load a soundfont from file (native only)
@@ -127,10 +206,8 @@ impl AudioEngine {
         let synth = Synthesizer::new(&soundfont, &settings)
             .map_err(|e| format!("Failed to create synthesizer: {:?}", e))?;
 
-        // Store soundfont name
         self.soundfont_name = name;
 
-        // Update shared state
         let mut state = self.state.lock().unwrap();
         state.synth = Some(synth);
         state.playing = true;
@@ -147,6 +224,23 @@ impl AudioEngine {
     /// Get the loaded soundfont name
     pub fn soundfont_name(&self) -> Option<&str> {
         self.soundfont_name.as_deref()
+    }
+
+    /// Render and output audio (WASM only - must be called each frame)
+    #[cfg(target_arch = "wasm32")]
+    pub fn render_audio(&mut self) {
+        let mut state = self.state.lock().unwrap();
+        if let Some(ref mut synth) = state.synth {
+            // Render ~1 frame worth of audio at 60fps: 44100/60 ≈ 735 samples
+            // Use 1024 for a nice power of 2
+            let samples = 1024;
+            if self.left_buffer.len() < samples {
+                self.left_buffer.resize(samples, 0.0);
+                self.right_buffer.resize(samples, 0.0);
+            }
+            synth.render(&mut self.left_buffer[..samples], &mut self.right_buffer[..samples]);
+            wasm::write_audio(&self.left_buffer[..samples], &self.right_buffer[..samples]);
+        }
     }
 
     /// Play a note (note on)
@@ -169,7 +263,6 @@ impl AudioEngine {
     pub fn all_notes_off(&self) {
         let mut state = self.state.lock().unwrap();
         if let Some(ref mut synth) = state.synth {
-            // Note off for all channels and all keys
             for channel in 0..16 {
                 for key in 0..128 {
                     synth.note_off(channel, key);
@@ -204,8 +297,6 @@ impl AudioEngine {
 
     /// Get list of preset names from the loaded soundfont
     pub fn get_preset_names(&self) -> Vec<(u8, u8, String)> {
-        // This would require keeping a reference to the soundfont
-        // For now, return standard GM instrument names
         let gm_names = [
             "Acoustic Grand Piano", "Bright Acoustic Piano", "Electric Grand Piano",
             "Honky-tonk Piano", "Electric Piano 1", "Electric Piano 2", "Harpsichord",
@@ -247,39 +338,5 @@ impl AudioEngine {
 impl Default for AudioEngine {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// WASM-specific FFI for loading soundfont from JavaScript cache
-#[cfg(target_arch = "wasm32")]
-pub mod wasm {
-    extern "C" {
-        fn bonnie_is_soundfont_loaded() -> i32;
-        fn bonnie_get_soundfont_size() -> usize;
-        fn bonnie_copy_soundfont(dest_ptr: *mut u8, max_len: usize) -> usize;
-    }
-
-    /// Check if the soundfont has been loaded by JavaScript
-    pub fn is_soundfont_cached() -> bool {
-        unsafe { bonnie_is_soundfont_loaded() != 0 }
-    }
-
-    /// Get the cached soundfont bytes from JavaScript
-    pub fn get_cached_soundfont() -> Option<Vec<u8>> {
-        unsafe {
-            let size = bonnie_get_soundfont_size();
-            if size == 0 {
-                return None;
-            }
-
-            let mut buffer = vec![0u8; size];
-            let copied = bonnie_copy_soundfont(buffer.as_mut_ptr(), size);
-
-            if copied != size {
-                return None;
-            }
-
-            Some(buffer)
-        }
     }
 }

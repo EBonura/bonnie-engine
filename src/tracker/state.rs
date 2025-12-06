@@ -334,6 +334,12 @@ impl TrackerState {
 
     /// Update playback (called each frame)
     pub fn update_playback(&mut self, delta: f64) {
+        // On WASM, we need to render audio each frame to push samples to Web Audio
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.audio.render_audio();
+        }
+
         if !self.playing {
             return;
         }

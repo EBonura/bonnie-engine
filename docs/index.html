@@ -190,6 +190,64 @@
         };
 
         // =============================================================================
+        // Audio Output (Web Audio API for synthesizer playback)
+        // =============================================================================
+
+        var AudioOutput = {
+            ctx: null,
+            sampleRate: 44100,
+            bufferSize: 4096,
+            nextStartTime: 0,
+
+            init: function(sampleRate) {
+                AudioOutput.sampleRate = sampleRate;
+                // Don't create context here - browsers require user gesture
+                console.log('Audio output initialized, sample rate:', sampleRate);
+            },
+
+            ensureContext: function() {
+                if (!AudioOutput.ctx) {
+                    AudioOutput.ctx = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: AudioOutput.sampleRate
+                    });
+                    AudioOutput.nextStartTime = AudioOutput.ctx.currentTime;
+                    console.log('AudioContext created');
+                }
+                if (AudioOutput.ctx.state === 'suspended') {
+                    AudioOutput.ctx.resume();
+                }
+                return AudioOutput.ctx;
+            },
+
+            write: function(leftPtr, rightPtr, len) {
+                var ctx = AudioOutput.ensureContext();
+                if (!ctx) return;
+
+                // Read samples from WASM memory
+                var leftData = new Float32Array(wasm_exports.memory.buffer, leftPtr, len);
+                var rightData = new Float32Array(wasm_exports.memory.buffer, rightPtr, len);
+
+                // Create audio buffer
+                var buffer = ctx.createBuffer(2, len, AudioOutput.sampleRate);
+                buffer.getChannelData(0).set(leftData);
+                buffer.getChannelData(1).set(rightData);
+
+                // Schedule playback
+                var source = ctx.createBufferSource();
+                source.buffer = buffer;
+                source.connect(ctx.destination);
+
+                // Schedule seamlessly
+                var now = ctx.currentTime;
+                if (AudioOutput.nextStartTime < now) {
+                    AudioOutput.nextStartTime = now;
+                }
+                source.start(AudioOutput.nextStartTime);
+                AudioOutput.nextStartTime += buffer.duration;
+            }
+        };
+
+        // =============================================================================
         // Soundfont Cache (fetch raw bytes for SF2 playback)
         // =============================================================================
 
@@ -360,6 +418,10 @@
                 env.bonnie_is_soundfont_loaded = SoundfontCache.isLoaded;
                 env.bonnie_get_soundfont_size = SoundfontCache.getSize;
                 env.bonnie_copy_soundfont = SoundfontCache.copyData;
+
+                // Audio output
+                env.bonnie_audio_init = AudioOutput.init;
+                env.bonnie_audio_write = AudioOutput.write;
             }
         });
 
