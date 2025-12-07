@@ -190,6 +190,57 @@ pub fn draw_viewport_3d(
         state.set_status(&format!("Vertex mode: {}", mode), 2.0);
     }
 
+    // Delete selected face with Delete or Backspace key
+    if inside_viewport && (is_key_pressed(KeyCode::Delete) || is_key_pressed(KeyCode::Backspace)) {
+        if let Selection::SectorFace { room, x, z, face } = &state.selection {
+            let (room_idx, gx, gz, face) = (*room, *x, *z, *face);
+
+            // Check if there's something to delete before calling save_undo
+            let has_face = match face {
+                SectorFace::Floor => state.level.rooms.get(room_idx)
+                    .and_then(|r| r.get_sector(gx, gz))
+                    .map(|s| s.floor.is_some())
+                    .unwrap_or(false),
+                SectorFace::Ceiling => state.level.rooms.get(room_idx)
+                    .and_then(|r| r.get_sector(gx, gz))
+                    .map(|s| s.ceiling.is_some())
+                    .unwrap_or(false),
+                _ => false, // Walls will be implemented later
+            };
+
+            if has_face {
+                state.save_undo();
+
+                let deleted = match face {
+                    SectorFace::Floor => {
+                        if let Some(room) = state.level.rooms.get_mut(room_idx) {
+                            if let Some(sector) = room.get_sector_mut(gx, gz) {
+                                sector.floor = None;
+                            }
+                            room.recalculate_bounds();
+                            Some("floor")
+                        } else { None }
+                    }
+                    SectorFace::Ceiling => {
+                        if let Some(room) = state.level.rooms.get_mut(room_idx) {
+                            if let Some(sector) = room.get_sector_mut(gx, gz) {
+                                sector.ceiling = None;
+                            }
+                            room.recalculate_bounds();
+                            Some("ceiling")
+                        } else { None }
+                    }
+                    _ => None,
+                };
+
+                if let Some(type_name) = deleted {
+                    state.selection = Selection::None;
+                    state.set_status(&format!("Deleted {}", type_name), 2.0);
+                }
+            }
+        }
+    }
+
     // Find hovered elements using 2D screen-space projection
     // Priority: vertex > edge > face
     let mut hovered_vertex: Option<(usize, usize, usize, usize, f32)> = None; // (room_idx, gx, gz, corner_idx, screen_dist)
@@ -678,6 +729,45 @@ pub fn draw_viewport_3d(
                                     state.drag_initial_heights.push(h[corner0]);
                                     state.drag_initial_heights.push(h[corner1]);
                                     state.viewport_drag_plane_y = (h[corner0] + h[corner1]) / 2.0;
+
+                                    // If linking, find coincident vertices for the edge
+                                    if state.link_coincident_vertices {
+                                        let base_x = room.position.x + (gx as f32) * SECTOR_SIZE;
+                                        let base_z = room.position.z + (gz as f32) * SECTOR_SIZE;
+
+                                        // Get positions of the two edge vertices
+                                        let edge_positions = [
+                                            match corner0 {
+                                                0 => Vec3::new(base_x, h[0], base_z),
+                                                1 => Vec3::new(base_x + SECTOR_SIZE, h[1], base_z),
+                                                2 => Vec3::new(base_x + SECTOR_SIZE, h[2], base_z + SECTOR_SIZE),
+                                                3 => Vec3::new(base_x, h[3], base_z + SECTOR_SIZE),
+                                                _ => unreachable!(),
+                                            },
+                                            match corner1 {
+                                                0 => Vec3::new(base_x, h[0], base_z),
+                                                1 => Vec3::new(base_x + SECTOR_SIZE, h[1], base_z),
+                                                2 => Vec3::new(base_x + SECTOR_SIZE, h[2], base_z + SECTOR_SIZE),
+                                                3 => Vec3::new(base_x, h[3], base_z + SECTOR_SIZE),
+                                                _ => unreachable!(),
+                                            },
+                                        ];
+
+                                        const EPSILON: f32 = 0.1;
+                                        for (pos, ri, vgx, vgz, ci, vface) in &all_vertices {
+                                            for ep in &edge_positions {
+                                                if (pos.x - ep.x).abs() < EPSILON &&
+                                                   (pos.y - ep.y).abs() < EPSILON &&
+                                                   (pos.z - ep.z).abs() < EPSILON {
+                                                    let key = (*ri, *vgx, *vgz, *vface, *ci);
+                                                    if !state.dragging_sector_vertices.contains(&key) {
+                                                        state.dragging_sector_vertices.push(key);
+                                                        state.drag_initial_heights.push(pos.y);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -786,11 +876,41 @@ pub fn draw_viewport_3d(
                             .unwrap_or_default();
 
                         if let Some(room) = state.level.rooms.get_mut(state.current_room) {
-                            // Convert world coords to grid coords
-                            let gx = ((snapped_x - room_pos.x) / SECTOR_SIZE) as usize;
-                            let gz = ((snapped_z - room_pos.z) / SECTOR_SIZE) as usize;
+                            // Convert world coords to local coords (can be negative)
+                            let local_x = snapped_x - room_pos.x;
+                            let local_z = snapped_z - room_pos.z;
 
-                            // Expand room grid if needed
+                            // Calculate grid coords, handling negative values
+                            let mut gx = (local_x / SECTOR_SIZE).floor() as i32;
+                            let mut gz = (local_z / SECTOR_SIZE).floor() as i32;
+
+                            // Expand grid in negative X direction if needed
+                            while gx < 0 {
+                                // Shift room position by one sector in -X
+                                room.position.x -= SECTOR_SIZE;
+                                // Insert new column at front
+                                room.sectors.insert(0, (0..room.depth).map(|_| None).collect());
+                                room.width += 1;
+                                gx += 1; // Grid index shifts up
+                            }
+
+                            // Expand grid in negative Z direction if needed
+                            while gz < 0 {
+                                // Shift room position by one sector in -Z
+                                room.position.z -= SECTOR_SIZE;
+                                // Insert new row at front of each column
+                                for col in &mut room.sectors {
+                                    col.insert(0, None);
+                                }
+                                room.depth += 1;
+                                gz += 1; // Grid index shifts up
+                            }
+
+                            // Now gx and gz are guaranteed >= 0, convert to usize
+                            let gx = gx as usize;
+                            let gz = gz as usize;
+
+                            // Expand room grid in positive direction if needed
                             while gx >= room.width {
                                 room.width += 1;
                                 room.sectors.push((0..room.depth).map(|_| None).collect());

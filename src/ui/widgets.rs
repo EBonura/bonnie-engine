@@ -3,6 +3,22 @@
 use macroquad::prelude::*;
 use super::{Rect, UiContext, draw_icon_centered};
 
+// Platform-specific URL opening
+#[cfg(not(target_arch = "wasm32"))]
+fn open_url(url: &str) {
+    let _ = webbrowser::open(url);
+}
+
+#[cfg(target_arch = "wasm32")]
+extern "C" {
+    fn bonnie_open_url(ptr: *const u8, len: usize);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn open_url(url: &str) {
+    unsafe { bonnie_open_url(url.as_ptr(), url.len()) }
+}
+
 // =============================================================================
 // Clickable Link Widget
 // =============================================================================
@@ -44,7 +60,7 @@ pub fn draw_link(
 
     // Open URL if clicked
     if clicked {
-        let _ = webbrowser::open(url);
+        open_url(url);
     }
 
     LinkResult {

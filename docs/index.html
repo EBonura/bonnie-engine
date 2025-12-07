@@ -405,6 +405,7 @@
 
             prefetchAll: async function() {
                 AssetLoader.setStatus('Loading manifest...');
+                TextureCache.timings.startTime = performance.now();
 
                 try {
                     var manifest = await (await fetch('assets/textures/manifest.txt')).text();
@@ -426,21 +427,44 @@
                     AssetLoader.addTotal(paths.length);
                     AssetLoader.setStatus('Loading assets...');
 
+                    var fetchStart = performance.now();
+
                     // Fetch and decode all in parallel
                     await Promise.all(paths.map(function(path) {
+                        var fetchEnd, blobSize;
                         return fetch(path)
-                            .then(function(r) { return r.blob(); })
-                            .then(function(blob) { return TextureCache.decodePng(blob); })
+                            .then(function(r) {
+                                return r.blob();
+                            })
+                            .then(function(blob) {
+                                blobSize = blob.size;
+                                TextureCache.timings.totalBytes += blobSize;
+                                fetchEnd = performance.now();
+                                return TextureCache.decodePng(blob);
+                            })
                             .then(function(decoded) {
                                 TextureCache.cache[path] = decoded;
                                 TextureCache.loaded++;
                                 AssetLoader.increment();
                             })
-                            .catch(function() {
+                            .catch(function(err) {
+                                console.warn('Failed to load texture:', path, err);
                                 TextureCache.loaded++;
                                 AssetLoader.increment();
                             });
                     }));
+
+                    var totalTime = performance.now() - TextureCache.timings.startTime;
+                    var fetchTime = performance.now() - fetchStart;
+
+                    // Log timing summary
+                    console.log('=== Texture Loading Performance ===');
+                    console.log('Total textures:', TextureCache.total);
+                    console.log('Total PNG bytes:', (TextureCache.timings.totalBytes / 1024 / 1024).toFixed(2), 'MB');
+                    console.log('Total load time:', totalTime.toFixed(0), 'ms');
+                    console.log('Throughput:', (TextureCache.timings.totalBytes / 1024 / totalTime).toFixed(2), 'KB/ms');
+                    console.log('Avg per texture:', (totalTime / TextureCache.total).toFixed(2), 'ms');
+                    console.log('===================================');
 
                     TextureCache.complete = true;
                     AssetLoader.setStatus('Starting engine...');
@@ -490,6 +514,11 @@
                 // Audio output
                 env.bonnie_audio_init = AudioOutput.init;
                 env.bonnie_audio_write = AudioOutput.write;
+
+                // URL opening
+                env.bonnie_open_url = function(ptr, len) {
+                    window.open(readWasmString(ptr, len), '_blank');
+                };
             }
         });
 
