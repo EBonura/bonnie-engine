@@ -287,7 +287,7 @@ pub enum ShadingMode {
 
 /// PS1 semi-transparency blend modes
 /// B = Back pixel (existing framebuffer), F = Front pixel (new pixel)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum BlendMode {
     #[default]
     Opaque,    // No blending, overwrite pixel

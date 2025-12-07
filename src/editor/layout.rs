@@ -332,10 +332,12 @@ fn draw_room_properties(ctx: &mut UiContext, rect: Rect, state: &mut EditorState
         );
         y += line_height;
 
-        draw_text(&format!("Vertices: {}", room.vertices.len()), x, (y + 14.0).floor(), 16.0, WHITE);
+        // Count sectors
+        let sector_count = room.iter_sectors().count();
+        draw_text(&format!("Size: {}x{}", room.width, room.depth), x, (y + 14.0).floor(), 16.0, WHITE);
         y += line_height;
 
-        draw_text(&format!("Faces: {}", room.faces.len()), x, (y + 14.0).floor(), 16.0, WHITE);
+        draw_text(&format!("Sectors: {}", sector_count), x, (y + 14.0).floor(), 16.0, WHITE);
         y += line_height;
 
         draw_text(&format!("Portals: {}", room.portals.len()), x, (y + 14.0).floor(), 16.0, WHITE);
@@ -363,7 +365,8 @@ fn draw_room_properties(ctx: &mut UiContext, rect: Rect, state: &mut EditorState
                 draw_rectangle(room_btn_rect.x.floor(), room_btn_rect.y.floor(), room_btn_rect.w, room_btn_rect.h, Color::from_rgba(60, 80, 60, 255));
             }
 
-            draw_text(&format!("  Room {} ({} faces)", room.id, room.faces.len()), x, (y + 14.0).floor(), 16.0, color);
+            let sector_count = room.iter_sectors().count();
+            draw_text(&format!("  Room {} ({} sectors)", room.id, sector_count), x, (y + 14.0).floor(), 16.0, color);
             y += line_height;
 
             if y > rect.bottom() - line_height {
@@ -375,58 +378,190 @@ fn draw_room_properties(ctx: &mut UiContext, rect: Rect, state: &mut EditorState
     }
 }
 
-fn draw_properties(_ctx: &mut UiContext, rect: Rect, state: &mut EditorState) {
+fn draw_properties(ctx: &mut UiContext, rect: Rect, state: &mut EditorState) {
     let mut y = rect.y.floor();
     let x = rect.x.floor();
     let line_height = 20.0;
+    let checkbox_size = 14.0;
+    let indent = 10.0;
 
-    match &state.selection {
+    // Helper to draw a checkbox toggle
+    let draw_checkbox = |ctx: &mut UiContext, cx: f32, cy: f32, checked: bool, label: &str| -> bool {
+        let box_rect = Rect::new(cx, cy, checkbox_size, checkbox_size);
+        let hovered = ctx.mouse.inside(&box_rect);
+        let clicked = ctx.mouse.clicked(&box_rect);
+
+        // Draw checkbox box
+        let box_color = if hovered {
+            Color::from_rgba(80, 80, 90, 255)
+        } else {
+            Color::from_rgba(50, 50, 60, 255)
+        };
+        draw_rectangle(cx.floor(), cy.floor(), checkbox_size, checkbox_size, box_color);
+        draw_rectangle_lines(cx.floor(), cy.floor(), checkbox_size, checkbox_size, 1.0, Color::from_rgba(100, 100, 110, 255));
+
+        // Draw checkmark if checked
+        if checked {
+            draw_text("✓", (cx + 2.0).floor(), (cy + 12.0).floor(), 14.0, Color::from_rgba(100, 255, 100, 255));
+        }
+
+        // Draw label
+        draw_text(label, (cx + checkbox_size + 5.0).floor(), (cy + 12.0).floor(), 14.0, WHITE);
+
+        clicked
+    };
+
+    // Clone selection to avoid borrow issues
+    let selection = state.selection.clone();
+
+    match &selection {
         super::Selection::None => {
             draw_text("Nothing selected", x, (y + 14.0).floor(), 16.0, Color::from_rgba(150, 150, 150, 255));
         }
         super::Selection::Room(idx) => {
             draw_text(&format!("Room {}", idx), x, (y + 14.0).floor(), 16.0, WHITE);
         }
-        super::Selection::Face { room, face } => {
-            draw_text(&format!("Face {} in Room {}", face, room), x, (y + 14.0).floor(), 16.0, WHITE);
+        super::Selection::Sector { room, x: gx, z: gz } | super::Selection::SectorFace { room, x: gx, z: gz, .. } => {
+            // Header
+            draw_text(&format!("Sector ({}, {})", gx, gz), x, (y + 14.0).floor(), 16.0, Color::from_rgba(255, 200, 80, 255));
             y += line_height;
 
-            if let Some(r) = state.level.rooms.get(*room) {
-                if let Some(f) = r.faces.get(*face) {
-                    let tex_display = if f.texture.is_valid() {
-                        format!("{}/{}", f.texture.pack, f.texture.name)
+            // Get sector data
+            let sector_data = state.level.rooms.get(*room)
+                .and_then(|r| r.get_sector(*gx, *gz))
+                .cloned();
+
+            if let Some(sector) = sector_data {
+                // === FLOOR ===
+                y += 5.0; // spacing
+                draw_text("Floor", x, (y + 14.0).floor(), 14.0, Color::from_rgba(150, 200, 255, 255));
+                y += line_height;
+
+                if let Some(floor) = &sector.floor {
+                    // Texture
+                    let tex_display = if floor.texture.is_valid() {
+                        format!("{}", floor.texture.name)
                     } else {
                         String::from("(none)")
                     };
-                    draw_text(&format!("Texture: {}", tex_display), x, (y + 14.0).floor(), 16.0, WHITE);
+                    draw_text(&format!("  Tex: {}", tex_display), x, (y + 14.0).floor(), 14.0, WHITE);
                     y += line_height;
-                    draw_text(&format!("Triangle: {}", f.is_triangle), x, (y + 14.0).floor(), 16.0, WHITE);
+
+                    // Heights (show if sloped)
+                    if !floor.is_flat() {
+                        draw_text(&format!("  Heights: [{:.0}, {:.0}, {:.0}, {:.0}]",
+                            floor.heights[0], floor.heights[1], floor.heights[2], floor.heights[3]),
+                            x, (y + 14.0).floor(), 14.0, WHITE);
+                        y += line_height;
+                    } else {
+                        draw_text(&format!("  Height: {:.0}", floor.heights[0]), x, (y + 14.0).floor(), 14.0, WHITE);
+                        y += line_height;
+                    }
+
+                    // Walkable toggle
+                    let walkable = floor.walkable;
+                    if draw_checkbox(ctx, x + indent, y, walkable, "Walkable") {
+                        if let Some(r) = state.level.rooms.get_mut(*room) {
+                            if let Some(s) = r.get_sector_mut(*gx, *gz) {
+                                if let Some(f) = &mut s.floor {
+                                    f.walkable = !f.walkable;
+                                }
+                            }
+                        }
+                    }
                     y += line_height;
-                    draw_text(&format!("Double-sided: {}", f.double_sided), x, (y + 14.0).floor(), 16.0, WHITE);
+
+                    // Blend mode
+                    draw_text(&format!("  Blend: {:?}", floor.blend_mode), x, (y + 14.0).floor(), 14.0, Color::from_rgba(150, 150, 150, 255));
+                    y += line_height;
+                } else {
+                    draw_text("  (no floor)", x, (y + 14.0).floor(), 14.0, Color::from_rgba(100, 100, 100, 255));
+                    y += line_height;
                 }
+
+                // === CEILING ===
+                y += 5.0;
+                draw_text("Ceiling", x, (y + 14.0).floor(), 14.0, Color::from_rgba(200, 150, 255, 255));
+                y += line_height;
+
+                if let Some(ceiling) = &sector.ceiling {
+                    // Texture
+                    let tex_display = if ceiling.texture.is_valid() {
+                        format!("{}", ceiling.texture.name)
+                    } else {
+                        String::from("(none)")
+                    };
+                    draw_text(&format!("  Tex: {}", tex_display), x, (y + 14.0).floor(), 14.0, WHITE);
+                    y += line_height;
+
+                    // Height
+                    if !ceiling.is_flat() {
+                        draw_text(&format!("  Heights: [{:.0}, {:.0}, {:.0}, {:.0}]",
+                            ceiling.heights[0], ceiling.heights[1], ceiling.heights[2], ceiling.heights[3]),
+                            x, (y + 14.0).floor(), 14.0, WHITE);
+                    } else {
+                        draw_text(&format!("  Height: {:.0}", ceiling.heights[0]), x, (y + 14.0).floor(), 14.0, WHITE);
+                    }
+                    y += line_height;
+
+                    // Walkable toggle (for ceiling, usually false)
+                    let walkable = ceiling.walkable;
+                    if draw_checkbox(ctx, x + indent, y, walkable, "Walkable") {
+                        if let Some(r) = state.level.rooms.get_mut(*room) {
+                            if let Some(s) = r.get_sector_mut(*gx, *gz) {
+                                if let Some(c) = &mut s.ceiling {
+                                    c.walkable = !c.walkable;
+                                }
+                            }
+                        }
+                    }
+                    y += line_height;
+                } else {
+                    draw_text("  (no ceiling)", x, (y + 14.0).floor(), 14.0, Color::from_rgba(100, 100, 100, 255));
+                    y += line_height;
+                }
+
+                // === WALLS ===
+                y += 5.0;
+                let wall_count = sector.walls_north.len() + sector.walls_east.len()
+                    + sector.walls_south.len() + sector.walls_west.len();
+                draw_text(&format!("Walls ({})", wall_count), x, (y + 14.0).floor(), 14.0, Color::from_rgba(255, 180, 120, 255));
+                y += line_height;
+
+                // Show wall details per direction
+                let wall_dirs = [
+                    ("N", &sector.walls_north),
+                    ("E", &sector.walls_east),
+                    ("S", &sector.walls_south),
+                    ("W", &sector.walls_west),
+                ];
+
+                for (dir_name, walls) in wall_dirs {
+                    if !walls.is_empty() {
+                        for (i, wall) in walls.iter().enumerate() {
+                            let label = if walls.len() == 1 {
+                                format!("  {}: {:.0}-{:.0}", dir_name, wall.y_bottom, wall.y_top)
+                            } else {
+                                format!("  {}[{}]: {:.0}-{:.0}", dir_name, i, wall.y_bottom, wall.y_top)
+                            };
+                            draw_text(&label, x, (y + 14.0).floor(), 14.0, WHITE);
+                            y += line_height;
+
+                            if y > rect.bottom() - line_height * 2.0 {
+                                draw_text("  ...", x, (y + 14.0).floor(), 14.0, Color::from_rgba(100, 100, 100, 255));
+                                return; // Out of space
+                            }
+                        }
+                    }
+                }
+            } else {
+                draw_text("  Sector not found", x, (y + 14.0).floor(), 14.0, Color::from_rgba(255, 100, 100, 255));
             }
-        }
-        super::Selection::Vertex { room, vertex } => {
-            draw_text(&format!("Vertex {} in Room {}", vertex, room), x, (y + 14.0).floor(), 16.0, WHITE);
-        }
-        super::Selection::Edge { room, v0, v1 } => {
-            draw_text(&format!("Edge {}-{} in Room {}", v0, v1, room), x, (y + 14.0).floor(), 16.0, WHITE);
         }
         super::Selection::Portal { room, portal } => {
             draw_text(&format!("Portal {} in Room {}", portal, room), x, (y + 14.0).floor(), 16.0, WHITE);
         }
     }
-
-    // Selected texture preview
-    y = (rect.y + 100.0).floor();
-    draw_text("Selected Texture:", x, (y + 14.0).floor(), 16.0, Color::from_rgba(150, 150, 150, 255));
-    y += line_height;
-    let tex_display = if state.selected_texture.is_valid() {
-        format!("{}/{}", state.selected_texture.pack, state.selected_texture.name)
-    } else {
-        String::from("(none)")
-    };
-    draw_text(&tex_display, x, (y + 14.0).floor(), 16.0, WHITE);
 }
 
 fn draw_status_bar(rect: Rect, state: &EditorState) {

@@ -24,3 +24,14 @@ The VT323 font is used under the SIL Open Font License, which permits use, modif
 - **Usage**: Default General MIDI soundfont for the tracker
 
 TimGM6mb is a small (~6MB) General MIDI soundfont. It is distributed under the GPL-2.0 license. When distributing this software with the soundfont included, the GPL-2.0 license terms apply to the soundfont file.
+
+## Textures
+
+### 64x Textures & Overlays
+
+- **Source**: [OpenGameArt](https://opengameart.org/content/64x-textures-an-overlays)
+- **Author**: FacadeGaikan
+- **License**: CC0 (Public Domain)
+- **Usage**: Texture pack for world editor
+
+This texture pack is released under CC0, meaning it is dedicated to the public domain with no restrictions on use.

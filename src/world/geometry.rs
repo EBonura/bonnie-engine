@@ -1,10 +1,13 @@
 //! Core geometry types for TR1-style levels
 //!
-//! Pure data structures with minimal behavior.
-//! All rendering/collision logic lives in separate modules.
+//! Sector-based geometry system inspired by TRLE.
+//! Rooms contain a 2D grid of sectors, each with floor, ceiling, and walls.
 
 use serde::{Serialize, Deserialize};
-use crate::rasterizer::{Vec3, Vec2, Vertex, Face as RasterFace};
+use crate::rasterizer::{Vec3, Vec2, Vertex, Face as RasterFace, BlendMode};
+
+/// TRLE sector size in world units
+pub const SECTOR_SIZE: f32 = 1024.0;
 
 /// Texture reference by pack and name
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -43,12 +46,205 @@ impl Default for TextureRef {
     }
 }
 
-/// Type of face (for TRLE-style editing)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FaceType {
-    Floor,
-    Ceiling,
-    Wall,
+fn default_true() -> bool { true }
+
+/// A horizontal face (floor or ceiling)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HorizontalFace {
+    /// Corner heights [NW, NE, SE, SW] - allows sloped surfaces
+    /// NW = (-X, -Z), NE = (+X, -Z), SE = (+X, +Z), SW = (-X, +Z)
+    pub heights: [f32; 4],
+    /// Texture reference
+    pub texture: TextureRef,
+    /// Custom UV coordinates (None = use default 0,0 to 1,1)
+    #[serde(default)]
+    pub uv: Option<[Vec2; 4]>,
+    /// Is this surface walkable? (for collision/AI)
+    #[serde(default = "default_true")]
+    pub walkable: bool,
+    /// Transparency/blend mode
+    #[serde(default)]
+    pub blend_mode: BlendMode,
+}
+
+impl HorizontalFace {
+    /// Create a flat horizontal face at the given height
+    pub fn flat(height: f32, texture: TextureRef) -> Self {
+        Self {
+            heights: [height, height, height, height],
+            texture,
+            uv: None,
+            walkable: true,
+            blend_mode: BlendMode::Opaque,
+        }
+    }
+
+    /// Create a sloped horizontal face
+    pub fn sloped(heights: [f32; 4], texture: TextureRef) -> Self {
+        Self {
+            heights,
+            texture,
+            uv: None,
+            walkable: true,
+            blend_mode: BlendMode::Opaque,
+        }
+    }
+
+    /// Get average height of the face
+    pub fn avg_height(&self) -> f32 {
+        (self.heights[0] + self.heights[1] + self.heights[2] + self.heights[3]) / 4.0
+    }
+
+    /// Check if the face is flat (all corners at same height)
+    pub fn is_flat(&self) -> bool {
+        let h = self.heights[0];
+        self.heights.iter().all(|&corner| (corner - h).abs() < 0.001)
+    }
+}
+
+/// A vertical face (wall) on a sector edge
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerticalFace {
+    /// Bottom Y position
+    pub y_bottom: f32,
+    /// Top Y position
+    pub y_top: f32,
+    /// Texture reference
+    pub texture: TextureRef,
+    /// Custom UV coordinates (None = use default)
+    #[serde(default)]
+    pub uv: Option<[Vec2; 4]>,
+    /// Is this a solid wall for collision?
+    #[serde(default = "default_true")]
+    pub solid: bool,
+    /// Transparency/blend mode
+    #[serde(default)]
+    pub blend_mode: BlendMode,
+}
+
+impl VerticalFace {
+    /// Create a wall from bottom to top
+    pub fn new(y_bottom: f32, y_top: f32, texture: TextureRef) -> Self {
+        Self {
+            y_bottom,
+            y_top,
+            texture,
+            uv: None,
+            solid: true,
+            blend_mode: BlendMode::Opaque,
+        }
+    }
+
+    /// Get the height of this wall
+    pub fn height(&self) -> f32 {
+        self.y_top - self.y_bottom
+    }
+}
+
+/// A single sector in the room grid
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Sector {
+    /// Floor face (None = no floor / pit)
+    pub floor: Option<HorizontalFace>,
+    /// Ceiling face (None = no ceiling / open sky)
+    pub ceiling: Option<HorizontalFace>,
+    /// Walls on north edge (-Z) - can have multiple stacked
+    #[serde(default)]
+    pub walls_north: Vec<VerticalFace>,
+    /// Walls on east edge (+X)
+    #[serde(default)]
+    pub walls_east: Vec<VerticalFace>,
+    /// Walls on south edge (+Z)
+    #[serde(default)]
+    pub walls_south: Vec<VerticalFace>,
+    /// Walls on west edge (-X)
+    #[serde(default)]
+    pub walls_west: Vec<VerticalFace>,
+}
+
+impl Sector {
+    /// Create an empty sector (no floor, ceiling, or walls)
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    /// Create a sector with just a floor
+    pub fn with_floor(height: f32, texture: TextureRef) -> Self {
+        Self {
+            floor: Some(HorizontalFace::flat(height, texture)),
+            ..Default::default()
+        }
+    }
+
+    /// Create a sector with floor and ceiling
+    pub fn with_floor_and_ceiling(floor_height: f32, ceiling_height: f32, texture: TextureRef) -> Self {
+        Self {
+            floor: Some(HorizontalFace::flat(floor_height, texture.clone())),
+            ceiling: Some(HorizontalFace::flat(ceiling_height, texture)),
+            ..Default::default()
+        }
+    }
+
+    /// Check if this sector has any geometry
+    pub fn has_geometry(&self) -> bool {
+        self.floor.is_some()
+            || self.ceiling.is_some()
+            || !self.walls_north.is_empty()
+            || !self.walls_east.is_empty()
+            || !self.walls_south.is_empty()
+            || !self.walls_west.is_empty()
+    }
+
+    /// Get all walls on a given edge
+    pub fn walls(&self, direction: Direction) -> &Vec<VerticalFace> {
+        match direction {
+            Direction::North => &self.walls_north,
+            Direction::East => &self.walls_east,
+            Direction::South => &self.walls_south,
+            Direction::West => &self.walls_west,
+        }
+    }
+
+    /// Get mutable walls on a given edge
+    pub fn walls_mut(&mut self, direction: Direction) -> &mut Vec<VerticalFace> {
+        match direction {
+            Direction::North => &mut self.walls_north,
+            Direction::East => &mut self.walls_east,
+            Direction::South => &mut self.walls_south,
+            Direction::West => &mut self.walls_west,
+        }
+    }
+}
+
+/// Cardinal direction for sector edges
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Direction {
+    North,  // -Z
+    East,   // +X
+    South,  // +Z
+    West,   // -X
+}
+
+impl Direction {
+    /// Get the opposite direction
+    pub fn opposite(self) -> Self {
+        match self {
+            Direction::North => Direction::South,
+            Direction::East => Direction::West,
+            Direction::South => Direction::North,
+            Direction::West => Direction::East,
+        }
+    }
+
+    /// Get offset in grid coordinates
+    pub fn offset(self) -> (i32, i32) {
+        match self {
+            Direction::North => (0, -1),
+            Direction::East => (1, 0),
+            Direction::South => (0, 1),
+            Direction::West => (-1, 0),
+        }
+    }
 }
 
 /// Axis-aligned bounding box
@@ -90,62 +286,6 @@ impl Aabb {
     }
 }
 
-/// A face (triangle or quad) in a room
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Face {
-    /// Vertex indices (4 elements; for triangles, indices[3] == indices[2])
-    pub indices: [usize; 4],
-    /// True if this is a triangle (only 3 unique vertices)
-    pub is_triangle: bool,
-    /// Texture reference (pack + name)
-    pub texture: TextureRef,
-    /// Render both sides (for thin walls, etc.)
-    pub double_sided: bool,
-    /// Type of face (Floor, Ceiling, or Wall)
-    pub face_type: FaceType,
-}
-
-impl Face {
-    /// Create a quad face with no texture
-    pub fn quad(v0: usize, v1: usize, v2: usize, v3: usize, face_type: FaceType) -> Self {
-        Self {
-            indices: [v0, v1, v2, v3],
-            is_triangle: false,
-            texture: TextureRef::none(),
-            double_sided: false,
-            face_type,
-        }
-    }
-
-    /// Create a quad face with texture
-    pub fn quad_textured(v0: usize, v1: usize, v2: usize, v3: usize, texture: TextureRef, face_type: FaceType) -> Self {
-        Self {
-            indices: [v0, v1, v2, v3],
-            is_triangle: false,
-            texture,
-            double_sided: false,
-            face_type,
-        }
-    }
-
-    /// Create a triangle face
-    pub fn tri(v0: usize, v1: usize, v2: usize, texture: TextureRef, face_type: FaceType) -> Self {
-        Self {
-            indices: [v0, v1, v2, v2], // Duplicate last vertex for uniform handling
-            is_triangle: true,
-            texture,
-            double_sided: false,
-            face_type,
-        }
-    }
-
-    /// Set double-sided rendering
-    pub fn with_double_sided(mut self, double_sided: bool) -> Self {
-        self.double_sided = double_sided;
-        self
-    }
-}
-
 /// Portal connecting two rooms
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Portal {
@@ -176,21 +316,23 @@ impl Portal {
     }
 }
 
-/// A room in the level
+/// A room in the level - contains a 2D grid of sectors
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Room {
     /// Unique room identifier
     pub id: usize,
-    /// Room position in world space
+    /// Room position in world space (origin of sector grid)
     pub position: Vec3,
-    /// Vertices in room-relative coordinates
-    pub vertices: Vec<Vec3>,
-    /// Faces referencing vertices by index
-    pub faces: Vec<Face>,
+    /// Grid width (number of sectors in X direction)
+    pub width: usize,
+    /// Grid depth (number of sectors in Z direction)
+    pub depth: usize,
+    /// 2D array of sectors [x][z], None = no sector at this position
+    pub sectors: Vec<Vec<Option<Sector>>>,
     /// Portals to adjacent rooms
     #[serde(default)]
     pub portals: Vec<Portal>,
-    /// Bounding box (room-relative) - computed from vertices, not serialized
+    /// Bounding box (room-relative) - computed from sectors, not serialized
     #[serde(skip)]
     pub bounds: Aabb,
     /// Ambient light level (0.0 = dark, 1.0 = bright)
@@ -203,42 +345,77 @@ fn default_ambient() -> f32 {
 }
 
 impl Room {
-    pub fn new(id: usize, position: Vec3) -> Self {
+    /// Create a new empty room with the given grid size
+    pub fn new(id: usize, position: Vec3, width: usize, depth: usize) -> Self {
+        // Initialize 2D grid with None
+        let sectors = (0..width)
+            .map(|_| (0..depth).map(|_| None).collect())
+            .collect();
+
         Self {
             id,
             position,
-            vertices: Vec::new(),
-            faces: Vec::new(),
+            width,
+            depth,
+            sectors,
             portals: Vec::new(),
-            bounds: Aabb::new(
-                Vec3::new(f32::MAX, f32::MAX, f32::MAX),
-                Vec3::new(f32::MIN, f32::MIN, f32::MIN),
-            ),
+            bounds: Aabb::default(),
             ambient: 0.5,
         }
     }
 
-    /// Add a vertex and return its index
-    pub fn add_vertex(&mut self, x: f32, y: f32, z: f32) -> usize {
-        let v = Vec3::new(x, y, z);
-        self.bounds.expand(v);
-        self.vertices.push(v);
-        self.vertices.len() - 1
+    /// Get sector at grid position (returns None if out of bounds or empty)
+    pub fn get_sector(&self, x: usize, z: usize) -> Option<&Sector> {
+        self.sectors.get(x)?.get(z)?.as_ref()
     }
 
-    /// Add a quad face with no texture
-    pub fn add_quad(&mut self, v0: usize, v1: usize, v2: usize, v3: usize, face_type: FaceType) {
-        self.faces.push(Face::quad(v0, v1, v2, v3, face_type));
+    /// Get mutable sector at grid position
+    pub fn get_sector_mut(&mut self, x: usize, z: usize) -> Option<&mut Sector> {
+        self.sectors.get_mut(x)?.get_mut(z)?.as_mut()
     }
 
-    /// Add a quad face with texture
-    pub fn add_quad_textured(&mut self, v0: usize, v1: usize, v2: usize, v3: usize, texture: TextureRef, face_type: FaceType) {
-        self.faces.push(Face::quad_textured(v0, v1, v2, v3, texture, face_type));
+    /// Set sector at grid position (creates if doesn't exist)
+    pub fn set_sector(&mut self, x: usize, z: usize, sector: Sector) {
+        if x < self.width && z < self.depth {
+            self.sectors[x][z] = Some(sector);
+        }
     }
 
-    /// Add a triangle face
-    pub fn add_tri(&mut self, v0: usize, v1: usize, v2: usize, texture: TextureRef, face_type: FaceType) {
-        self.faces.push(Face::tri(v0, v1, v2, texture, face_type));
+    /// Remove sector at grid position
+    pub fn remove_sector(&mut self, x: usize, z: usize) {
+        if x < self.width && z < self.depth {
+            self.sectors[x][z] = None;
+        }
+    }
+
+    /// Ensure sector exists at position, creating empty one if needed
+    pub fn ensure_sector(&mut self, x: usize, z: usize) -> &mut Sector {
+        if x < self.width && z < self.depth {
+            if self.sectors[x][z].is_none() {
+                self.sectors[x][z] = Some(Sector::empty());
+            }
+            self.sectors[x][z].as_mut().unwrap()
+        } else {
+            panic!("Sector position ({}, {}) out of bounds", x, z);
+        }
+    }
+
+    /// Set floor at grid position
+    pub fn set_floor(&mut self, x: usize, z: usize, height: f32, texture: TextureRef) {
+        let sector = self.ensure_sector(x, z);
+        sector.floor = Some(HorizontalFace::flat(height, texture));
+    }
+
+    /// Set ceiling at grid position
+    pub fn set_ceiling(&mut self, x: usize, z: usize, height: f32, texture: TextureRef) {
+        let sector = self.ensure_sector(x, z);
+        sector.ceiling = Some(HorizontalFace::flat(height, texture));
+    }
+
+    /// Add a wall on a sector edge
+    pub fn add_wall(&mut self, x: usize, z: usize, direction: Direction, y_bottom: f32, y_top: f32, texture: TextureRef) {
+        let sector = self.ensure_sector(x, z);
+        sector.walls_mut(direction).push(VerticalFace::new(y_bottom, y_top, texture));
     }
 
     /// Add a portal to another room
@@ -246,26 +423,81 @@ impl Room {
         self.portals.push(Portal::new(target_room, vertices, normal));
     }
 
-    /// Recalculate bounds from vertices (call after loading from file)
-    pub fn recalculate_bounds(&mut self) {
-        if self.vertices.is_empty() {
-            self.bounds = Aabb::default();
-            return;
+    /// Convert world position to grid coordinates
+    pub fn world_to_grid(&self, world_x: f32, world_z: f32) -> Option<(usize, usize)> {
+        let local_x = world_x - self.position.x;
+        let local_z = world_z - self.position.z;
+
+        if local_x < 0.0 || local_z < 0.0 {
+            return None;
         }
 
+        let grid_x = (local_x / SECTOR_SIZE) as usize;
+        let grid_z = (local_z / SECTOR_SIZE) as usize;
+
+        if grid_x < self.width && grid_z < self.depth {
+            Some((grid_x, grid_z))
+        } else {
+            None
+        }
+    }
+
+    /// Convert grid coordinates to world position (returns corner of sector)
+    pub fn grid_to_world(&self, x: usize, z: usize) -> Vec3 {
+        Vec3::new(
+            self.position.x + (x as f32) * SECTOR_SIZE,
+            self.position.y,
+            self.position.z + (z as f32) * SECTOR_SIZE,
+        )
+    }
+
+    /// Recalculate bounds from sectors (call after loading from file)
+    pub fn recalculate_bounds(&mut self) {
         self.bounds = Aabb::new(
             Vec3::new(f32::MAX, f32::MAX, f32::MAX),
             Vec3::new(f32::MIN, f32::MIN, f32::MIN),
         );
 
-        for v in &self.vertices {
-            self.bounds.expand(*v);
+        for x in 0..self.width {
+            for z in 0..self.depth {
+                if let Some(sector) = &self.sectors[x][z] {
+                    let base_x = (x as f32) * SECTOR_SIZE;
+                    let base_z = (z as f32) * SECTOR_SIZE;
+
+                    // Expand bounds for floor corners
+                    if let Some(floor) = &sector.floor {
+                        for (i, &h) in floor.heights.iter().enumerate() {
+                            let (dx, dz) = match i {
+                                0 => (0.0, 0.0),           // NW
+                                1 => (SECTOR_SIZE, 0.0),   // NE
+                                2 => (SECTOR_SIZE, SECTOR_SIZE), // SE
+                                3 => (0.0, SECTOR_SIZE),   // SW
+                                _ => unreachable!(),
+                            };
+                            self.bounds.expand(Vec3::new(base_x + dx, h, base_z + dz));
+                        }
+                    }
+
+                    // Expand bounds for ceiling corners
+                    if let Some(ceiling) = &sector.ceiling {
+                        for (i, &h) in ceiling.heights.iter().enumerate() {
+                            let (dx, dz) = match i {
+                                0 => (0.0, 0.0),
+                                1 => (SECTOR_SIZE, 0.0),
+                                2 => (SECTOR_SIZE, SECTOR_SIZE),
+                                3 => (0.0, SECTOR_SIZE),
+                                _ => unreachable!(),
+                            };
+                            self.bounds.expand(Vec3::new(base_x + dx, h, base_z + dz));
+                        }
+                    }
+                }
+            }
         }
     }
 
     /// Check if a world-space point is inside this room's bounds
     pub fn contains_point(&self, point: Vec3) -> bool {
-        // Convert point to room-relative coordinates
         let relative = Vec3::new(
             point.x - self.position.x,
             point.y - self.position.y,
@@ -290,56 +522,210 @@ impl Room {
         )
     }
 
+    /// Iterate over all sectors with their grid coordinates
+    pub fn iter_sectors(&self) -> impl Iterator<Item = (usize, usize, &Sector)> {
+        self.sectors.iter().enumerate().flat_map(|(x, col)| {
+            col.iter().enumerate().filter_map(move |(z, sector)| {
+                sector.as_ref().map(|s| (x, z, s))
+            })
+        })
+    }
+
     /// Convert room geometry to rasterizer format (vertices + faces)
     /// Returns world-space vertices ready for rendering
-    ///
-    /// Resolves texture references to indices in the provided texture array
-    /// Returns (vertices, faces) with resolved texture indices
     pub fn to_render_data_with_textures<F>(&self, resolve_texture: F) -> (Vec<Vertex>, Vec<RasterFace>)
     where
         F: Fn(&TextureRef) -> Option<usize>,
     {
-        let mut vertices = Vec::with_capacity(self.faces.len() * 4);
-        let mut faces = Vec::with_capacity(self.faces.len() * 2);
+        let mut vertices = Vec::new();
+        let mut faces = Vec::new();
 
-        for face in &self.faces {
-            let base_idx = vertices.len();
+        for (grid_x, grid_z, sector) in self.iter_sectors() {
+            let base_x = self.position.x + (grid_x as f32) * SECTOR_SIZE;
+            let base_z = self.position.z + (grid_z as f32) * SECTOR_SIZE;
 
-            // Get the 4 vertices (or 3 for triangles, with last duplicated)
-            let v0 = self.vertices[face.indices[0]];
-            let v1 = self.vertices[face.indices[1]];
-            let v2 = self.vertices[face.indices[2]];
-            let v3 = self.vertices[face.indices[3]];
+            // Render floor
+            if let Some(floor) = &sector.floor {
+                self.add_horizontal_face_to_render_data(
+                    &mut vertices,
+                    &mut faces,
+                    floor,
+                    base_x,
+                    base_z,
+                    true, // is_floor
+                    &resolve_texture,
+                );
+            }
 
-            // Convert to world space
-            let world_v0 = v0 + self.position;
-            let world_v1 = v1 + self.position;
-            let world_v2 = v2 + self.position;
-            let world_v3 = v3 + self.position;
+            // Render ceiling
+            if let Some(ceiling) = &sector.ceiling {
+                self.add_horizontal_face_to_render_data(
+                    &mut vertices,
+                    &mut faces,
+                    ceiling,
+                    base_x,
+                    base_z,
+                    false, // is_ceiling
+                    &resolve_texture,
+                );
+            }
 
-            // Calculate face normal from first triangle
-            let edge1 = world_v1 - world_v0;
-            let edge2 = world_v2 - world_v0;
-            let normal = edge1.cross(edge2).normalize();
-
-            // Create vertices with UVs and normals
-            vertices.push(Vertex::new(world_v0, Vec2::new(0.0, 0.0), normal));
-            vertices.push(Vertex::new(world_v1, Vec2::new(1.0, 0.0), normal));
-            vertices.push(Vertex::new(world_v2, Vec2::new(1.0, 1.0), normal));
-            vertices.push(Vertex::new(world_v3, Vec2::new(0.0, 1.0), normal));
-
-            // Resolve texture reference to index
-            let texture_id = resolve_texture(&face.texture).unwrap_or(0);
-
-            // Create two triangles for the quad
-            faces.push(RasterFace::with_texture(base_idx, base_idx + 1, base_idx + 2, texture_id));
-
-            if !face.is_triangle {
-                faces.push(RasterFace::with_texture(base_idx, base_idx + 2, base_idx + 3, texture_id));
+            // Render walls on each edge
+            for wall in &sector.walls_north {
+                self.add_wall_to_render_data(&mut vertices, &mut faces, wall, base_x, base_z, Direction::North, &resolve_texture);
+            }
+            for wall in &sector.walls_east {
+                self.add_wall_to_render_data(&mut vertices, &mut faces, wall, base_x, base_z, Direction::East, &resolve_texture);
+            }
+            for wall in &sector.walls_south {
+                self.add_wall_to_render_data(&mut vertices, &mut faces, wall, base_x, base_z, Direction::South, &resolve_texture);
+            }
+            for wall in &sector.walls_west {
+                self.add_wall_to_render_data(&mut vertices, &mut faces, wall, base_x, base_z, Direction::West, &resolve_texture);
             }
         }
 
         (vertices, faces)
+    }
+
+    /// Helper to add a horizontal face (floor or ceiling) to render data
+    fn add_horizontal_face_to_render_data<F>(
+        &self,
+        vertices: &mut Vec<Vertex>,
+        faces: &mut Vec<RasterFace>,
+        face: &HorizontalFace,
+        base_x: f32,
+        base_z: f32,
+        is_floor: bool,
+        resolve_texture: &F,
+    )
+    where
+        F: Fn(&TextureRef) -> Option<usize>,
+    {
+        let base_idx = vertices.len();
+
+        // Corner positions: NW, NE, SE, SW
+        let corners = [
+            Vec3::new(base_x, face.heights[0], base_z),                         // NW
+            Vec3::new(base_x + SECTOR_SIZE, face.heights[1], base_z),           // NE
+            Vec3::new(base_x + SECTOR_SIZE, face.heights[2], base_z + SECTOR_SIZE), // SE
+            Vec3::new(base_x, face.heights[3], base_z + SECTOR_SIZE),           // SW
+        ];
+
+        // Calculate normal from cross product
+        // For floor (facing up): use edge2 x edge1 to get +Y normal
+        // For ceiling (facing down): use edge1 x edge2 to get -Y normal
+        let edge1 = corners[1] - corners[0]; // NW -> NE (along +X)
+        let edge2 = corners[3] - corners[0]; // NW -> SW (along +Z)
+        let normal = if is_floor {
+            edge2.cross(edge1).normalize() // +Z x +X = +Y (up)
+        } else {
+            edge1.cross(edge2).normalize() // +X x +Z = -Y (down)
+        };
+
+        // Default UVs
+        let uvs = face.uv.unwrap_or([
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.0),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(0.0, 1.0),
+        ]);
+
+        // Add vertices
+        for i in 0..4 {
+            vertices.push(Vertex::new(corners[i], uvs[i], normal));
+        }
+
+        let texture_id = resolve_texture(&face.texture).unwrap_or(0);
+
+        // Winding order: floor = CCW from above, ceiling = CW from above (so it faces down)
+        if is_floor {
+            faces.push(RasterFace::with_texture(base_idx, base_idx + 1, base_idx + 2, texture_id));
+            faces.push(RasterFace::with_texture(base_idx, base_idx + 2, base_idx + 3, texture_id));
+        } else {
+            faces.push(RasterFace::with_texture(base_idx, base_idx + 3, base_idx + 2, texture_id));
+            faces.push(RasterFace::with_texture(base_idx, base_idx + 2, base_idx + 1, texture_id));
+        }
+    }
+
+    /// Helper to add a wall to render data
+    fn add_wall_to_render_data<F>(
+        &self,
+        vertices: &mut Vec<Vertex>,
+        faces: &mut Vec<RasterFace>,
+        wall: &VerticalFace,
+        base_x: f32,
+        base_z: f32,
+        direction: Direction,
+        resolve_texture: &F,
+    )
+    where
+        F: Fn(&TextureRef) -> Option<usize>,
+    {
+        let base_idx = vertices.len();
+
+        // Wall corners based on direction
+        // Each wall has 4 corners: bottom-left, bottom-right, top-right, top-left (from inside room)
+        let (corners, normal) = match direction {
+            Direction::North => {
+                // Wall at -Z edge, facing +Z (into room)
+                let corners = [
+                    Vec3::new(base_x, wall.y_bottom, base_z),                    // bottom-left
+                    Vec3::new(base_x + SECTOR_SIZE, wall.y_bottom, base_z),      // bottom-right
+                    Vec3::new(base_x + SECTOR_SIZE, wall.y_top, base_z),         // top-right
+                    Vec3::new(base_x, wall.y_top, base_z),                       // top-left
+                ];
+                (corners, Vec3::new(0.0, 0.0, 1.0))
+            }
+            Direction::East => {
+                // Wall at +X edge, facing -X (into room)
+                let corners = [
+                    Vec3::new(base_x + SECTOR_SIZE, wall.y_bottom, base_z),
+                    Vec3::new(base_x + SECTOR_SIZE, wall.y_bottom, base_z + SECTOR_SIZE),
+                    Vec3::new(base_x + SECTOR_SIZE, wall.y_top, base_z + SECTOR_SIZE),
+                    Vec3::new(base_x + SECTOR_SIZE, wall.y_top, base_z),
+                ];
+                (corners, Vec3::new(-1.0, 0.0, 0.0))
+            }
+            Direction::South => {
+                // Wall at +Z edge, facing -Z (into room)
+                let corners = [
+                    Vec3::new(base_x + SECTOR_SIZE, wall.y_bottom, base_z + SECTOR_SIZE),
+                    Vec3::new(base_x, wall.y_bottom, base_z + SECTOR_SIZE),
+                    Vec3::new(base_x, wall.y_top, base_z + SECTOR_SIZE),
+                    Vec3::new(base_x + SECTOR_SIZE, wall.y_top, base_z + SECTOR_SIZE),
+                ];
+                (corners, Vec3::new(0.0, 0.0, -1.0))
+            }
+            Direction::West => {
+                // Wall at -X edge, facing +X (into room)
+                let corners = [
+                    Vec3::new(base_x, wall.y_bottom, base_z + SECTOR_SIZE),
+                    Vec3::new(base_x, wall.y_bottom, base_z),
+                    Vec3::new(base_x, wall.y_top, base_z),
+                    Vec3::new(base_x, wall.y_top, base_z + SECTOR_SIZE),
+                ];
+                (corners, Vec3::new(1.0, 0.0, 0.0))
+            }
+        };
+
+        // Default UVs for wall
+        let uvs = wall.uv.unwrap_or([
+            Vec2::new(0.0, 1.0),  // bottom-left
+            Vec2::new(1.0, 1.0),  // bottom-right
+            Vec2::new(1.0, 0.0),  // top-right
+            Vec2::new(0.0, 0.0),  // top-left
+        ]);
+
+        for i in 0..4 {
+            vertices.push(Vertex::new(corners[i], uvs[i], normal));
+        }
+
+        let texture_id = resolve_texture(&wall.texture).unwrap_or(0);
+
+        // Two triangles for the quad
+        faces.push(RasterFace::with_texture(base_idx, base_idx + 1, base_idx + 2, texture_id));
+        faces.push(RasterFace::with_texture(base_idx, base_idx + 2, base_idx + 3, texture_id));
     }
 }
 
@@ -422,20 +808,12 @@ impl Level {
 pub fn create_empty_level() -> Level {
     let mut level = Level::new();
 
-    // Create a single starter room with one sector floor
-    let mut room0 = Room::new(0, Vec3::ZERO);
+    // Create a single starter room with one sector (1x1 grid)
+    let mut room0 = Room::new(0, Vec3::ZERO, 1, 1);
 
-    // Floor vertices - single 1024×1024 TRLE sector at y = 0
-    // Counter-clockwise winding when viewed from above (for correct normal direction)
-    let f0 = room0.add_vertex(0.0, 0.0, 0.0);
-    let f1 = room0.add_vertex(0.0, 0.0, 1024.0);
-    let f2 = room0.add_vertex(1024.0, 0.0, 1024.0);
-    let f3 = room0.add_vertex(1024.0, 0.0, 0.0);
-
-    // Floor face with retro texture pack
-    // If pack doesn't exist or texture doesn't exist, will fall back to checkerboard
+    // Add floor at height 0
     let texture = TextureRef::new("retro-texture-pack", "FLOOR_1A");
-    room0.add_quad_textured(f0, f1, f2, f3, texture, FaceType::Floor);
+    room0.set_floor(0, 0, 0.0, texture);
 
     room0.recalculate_bounds();
     level.rooms.push(room0);
@@ -443,41 +821,27 @@ pub fn create_empty_level() -> Level {
     level
 }
 
-/// Create a simple test level with two connected rooms
+/// Create a simple test level with a fully enclosed room
 /// Uses TRLE sector sizes (1024 units per sector)
 pub fn create_test_level() -> Level {
     let mut level = Level::new();
 
     // Room 0: Single sector room (1024×1024, height 1024 = 4 clicks)
-    let mut room0 = Room::new(0, Vec3::ZERO);
+    let mut room0 = Room::new(0, Vec3::ZERO, 1, 1);
 
-    // Floor vertices (y = 0)
-    let f0 = room0.add_vertex(0.0, 0.0, 0.0);
-    let f1 = room0.add_vertex(1024.0, 0.0, 0.0);
-    let f2 = room0.add_vertex(1024.0, 0.0, 1024.0);
-    let f3 = room0.add_vertex(0.0, 0.0, 1024.0);
+    // Floor at y=0, ceiling at y=1024
+    let floor_tex = TextureRef::new("retro-texture-pack", "FLOOR_1A");
+    let ceiling_tex = TextureRef::new("retro-texture-pack", "FLOOR_1A");
+    let wall_tex = TextureRef::new("retro-texture-pack", "WALL_1A");
 
-    // Ceiling vertices (y = 1024 = 4 clicks high)
-    let c0 = room0.add_vertex(0.0, 1024.0, 0.0);
-    let c1 = room0.add_vertex(1024.0, 1024.0, 0.0);
-    let c2 = room0.add_vertex(1024.0, 1024.0, 1024.0);
-    let c3 = room0.add_vertex(0.0, 1024.0, 1024.0);
+    room0.set_floor(0, 0, 0.0, floor_tex);
+    room0.set_ceiling(0, 0, 1024.0, ceiling_tex);
 
-    // Floor
-    room0.add_quad(f0, f1, f2, f3, FaceType::Floor);
-
-    // Ceiling
-    room0.add_quad(c3, c2, c1, c0, FaceType::Ceiling);
-
-    // Four walls
-    // Wall at Z=0 (-Z side)
-    room0.add_quad(f0, c0, c1, f1, FaceType::Wall);
-    // Wall at X=0 (-X side)
-    room0.add_quad(f3, c3, c0, f0, FaceType::Wall);
-    // Wall at X=1024 (+X side)
-    room0.add_quad(f1, c1, c2, f2, FaceType::Wall);
-    // Wall at Z=1024 (+Z side)
-    room0.add_quad(f2, c2, c3, f3, FaceType::Wall);
+    // Four walls around the single sector
+    room0.add_wall(0, 0, Direction::North, 0.0, 1024.0, wall_tex.clone());
+    room0.add_wall(0, 0, Direction::East, 0.0, 1024.0, wall_tex.clone());
+    room0.add_wall(0, 0, Direction::South, 0.0, 1024.0, wall_tex.clone());
+    room0.add_wall(0, 0, Direction::West, 0.0, 1024.0, wall_tex);
 
     room0.recalculate_bounds();
     level.add_room(room0);

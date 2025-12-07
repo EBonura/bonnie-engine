@@ -24,15 +24,60 @@ pub enum EditorTool {
     PlaceObject,
 }
 
+/// Which face within a sector is selected
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SectorFace {
+    Floor,
+    Ceiling,
+    WallNorth(usize),  // Index into walls array
+    WallEast(usize),
+    WallSouth(usize),
+    WallWest(usize),
+}
+
 /// What is currently selected in the editor
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Selection {
     None,
     Room(usize),
-    Vertex { room: usize, vertex: usize },
-    Edge { room: usize, v0: usize, v1: usize },  // Edge defined by two vertex indices
-    Face { room: usize, face: usize },
+    /// Entire sector selected (all faces)
+    Sector { room: usize, x: usize, z: usize },
+    /// Specific face within a sector
+    SectorFace { room: usize, x: usize, z: usize, face: SectorFace },
     Portal { room: usize, portal: usize },
+}
+
+impl Selection {
+    /// Check if this selection includes a specific sector (either whole sector or face within it)
+    pub fn includes_sector(&self, room_idx: usize, sx: usize, sz: usize) -> bool {
+        match self {
+            Selection::Sector { room, x, z } => *room == room_idx && *x == sx && *z == sz,
+            Selection::SectorFace { room, x, z, .. } => *room == room_idx && *x == sx && *z == sz,
+            _ => false,
+        }
+    }
+
+    /// Get the sector coordinates if this is a sector or sector-face selection
+    pub fn sector_coords(&self) -> Option<(usize, usize, usize)> {
+        match self {
+            Selection::Sector { room, x, z } => Some((*room, *x, *z)),
+            Selection::SectorFace { room, x, z, .. } => Some((*room, *x, *z)),
+            _ => None,
+        }
+    }
+
+    /// Check if this selection includes a specific face
+    pub fn includes_face(&self, room_idx: usize, sx: usize, sz: usize, face: SectorFace) -> bool {
+        match self {
+            // Whole sector selection includes all faces
+            Selection::Sector { room, x, z } => *room == room_idx && *x == sx && *z == sz,
+            // Face selection only matches exact face
+            Selection::SectorFace { room, x, z, face: f } => {
+                *room == room_idx && *x == sx && *z == sz && *f == face
+            }
+            _ => false,
+        }
+    }
 }
 
 /// Editor state
@@ -98,11 +143,18 @@ pub struct EditorState {
     pub grid_dragging_vertices: Vec<usize>,   // All vertices being dragged (for linking)
     pub grid_drag_started: bool, // True if we've started dragging (for undo)
 
-    /// 3D viewport vertex dragging state
+    /// 3D viewport vertex dragging state (legacy - kept for compatibility)
     pub viewport_dragging_vertices: Vec<(usize, usize)>, // List of (room_idx, vertex_idx)
     pub viewport_drag_started: bool,
     pub viewport_drag_plane_y: f32, // Y height of the drag plane (reference point for delta)
     pub viewport_drag_initial_y: Vec<f32>, // Initial Y positions of each dragged vertex
+
+    /// 3D viewport sector-based vertex dragging
+    /// Each entry is (room_idx, gx, gz, face_type, corner_idx)
+    /// corner_idx: 0=NW, 1=NE, 2=SE, 3=SW for horizontal faces
+    /// For walls: 0=bottom-left, 1=bottom-right, 2=top-right, 3=top-left
+    pub dragging_sector_vertices: Vec<(usize, usize, usize, SectorFace, usize)>,
+    pub drag_initial_heights: Vec<f32>, // Initial Y/height values for each vertex
 
     /// Texture palette state
     pub texture_packs: Vec<TexturePack>,
@@ -163,6 +215,8 @@ impl EditorState {
             viewport_drag_started: false,
             viewport_drag_plane_y: 0.0,
             viewport_drag_initial_y: Vec::new(),
+            dragging_sector_vertices: Vec::new(),
+            drag_initial_heights: Vec::new(),
             texture_packs,
             selected_pack: 0,
             texture_scroll: 0.0,
@@ -263,18 +317,7 @@ impl EditorState {
 
     /// Check if a selection is in the multi-selection list
     pub fn is_multi_selected(&self, selection: &Selection) -> bool {
-        self.multi_selection.iter().any(|s| match (s, selection) {
-            (Selection::Face { room: r1, face: f1 }, Selection::Face { room: r2, face: f2 }) => {
-                r1 == r2 && f1 == f2
-            }
-            (Selection::Vertex { room: r1, vertex: v1 }, Selection::Vertex { room: r2, vertex: v2 }) => {
-                r1 == r2 && v1 == v2
-            }
-            (Selection::Edge { room: r1, v0: v0_1, v1: v1_1 }, Selection::Edge { room: r2, v0: v0_2, v1: v1_2 }) => {
-                r1 == r2 && v0_1 == v0_2 && v1_1 == v1_2
-            }
-            _ => false,
-        })
+        self.multi_selection.iter().any(|s| s == selection)
     }
 
     /// Add a selection to the multi-selection list (if not already present)
@@ -291,18 +334,7 @@ impl EditorState {
 
     /// Toggle a selection in the multi-selection list
     pub fn toggle_multi_selection(&mut self, selection: Selection) {
-        if let Some(pos) = self.multi_selection.iter().position(|s| match (s, &selection) {
-            (Selection::Face { room: r1, face: f1 }, Selection::Face { room: r2, face: f2 }) => {
-                r1 == r2 && f1 == f2
-            }
-            (Selection::Vertex { room: r1, vertex: v1 }, Selection::Vertex { room: r2, vertex: v2 }) => {
-                r1 == r2 && v1 == v2
-            }
-            (Selection::Edge { room: r1, v0: v0_1, v1: v1_1 }, Selection::Edge { room: r2, v0: v0_2, v1: v1_2 }) => {
-                r1 == r2 && v0_1 == v0_2 && v1_1 == v1_2
-            }
-            _ => false,
-        }) {
+        if let Some(pos) = self.multi_selection.iter().position(|s| s == &selection) {
             self.multi_selection.remove(pos);
         } else if !matches!(selection, Selection::None) {
             self.multi_selection.push(selection);
