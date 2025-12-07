@@ -181,6 +181,7 @@ This project uses the following free texture packs:
 
 #### Medium Priority
 - [ ] Add aspect ratio toggle: Currently locked to PS1 4:3 (320x240), add icon to toggle full available space (affects World Editor and Modeler)
+- [ ] **Research PS1 transparency**: Investigate how transparency/semi-transparency worked on PS1 hardware (blending modes, limitations). Could be used for fading grid lines, water effects, etc.
 
 ---
 

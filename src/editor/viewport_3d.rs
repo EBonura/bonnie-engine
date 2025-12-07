@@ -751,6 +751,46 @@ pub fn draw_viewport_3d(
         }
     }
 
+    // Draw small 3x3 ceiling grid centered on hovered tile when in ceiling placement mode
+    if let Some((snapped_x, snapped_z, _, _)) = preview_sector {
+        if state.tool == EditorTool::DrawCeiling {
+            use super::{CEILING_HEIGHT, SECTOR_SIZE};
+
+            let ceiling_grid_color = RasterColor::new(80, 60, 100); // Purple tint
+
+            // Center of the hovered sector
+            let center_x = snapped_x + SECTOR_SIZE * 0.5;
+            let center_z = snapped_z + SECTOR_SIZE * 0.5;
+
+            // 3x3 grid = 9 cells, so 4 lines in each direction
+            let half_extent = SECTOR_SIZE * 1.5; // 1.5 sectors each side = 3 sectors total
+
+            // X-parallel lines (4 lines for 3x3 grid)
+            for i in 0..=3 {
+                let z = center_z - half_extent + (i as f32 * SECTOR_SIZE);
+                draw_3d_line(
+                    fb,
+                    Vec3::new(center_x - half_extent, CEILING_HEIGHT, z),
+                    Vec3::new(center_x + half_extent, CEILING_HEIGHT, z),
+                    &state.camera_3d,
+                    ceiling_grid_color,
+                );
+            }
+
+            // Z-parallel lines (4 lines for 3x3 grid)
+            for i in 0..=3 {
+                let x = center_x - half_extent + (i as f32 * SECTOR_SIZE);
+                draw_3d_line(
+                    fb,
+                    Vec3::new(x, CEILING_HEIGHT, center_z - half_extent),
+                    Vec3::new(x, CEILING_HEIGHT, center_z + half_extent),
+                    &state.camera_3d,
+                    ceiling_grid_color,
+                );
+            }
+        }
+    }
+
     // Build texture map from texture packs
     let mut texture_map: std::collections::HashMap<(String, String), usize> = std::collections::HashMap::new();
     let mut texture_idx = 0;
