@@ -70,12 +70,10 @@ async fn main() {
     };
 
     // App state with all tools
-    let initial_file = if std::path::Path::new("assets/levels/test.ron").exists() {
-        Some(PathBuf::from("assets/levels/test.ron"))
-    } else {
-        None
-    };
-    let mut app = AppState::new(level, initial_file, icon_font);
+    let mut app = AppState::new(level, None, icon_font);
+
+    // Track if this is the first time opening World Editor (to show browser)
+    let mut world_editor_first_open = true;
 
     // Load textures from manifest (WASM needs async loading)
     #[cfg(target_arch = "wasm32")]
@@ -119,6 +117,12 @@ async fn main() {
         ];
         if let Some(clicked) = draw_fixed_tabs(&mut ui_ctx, tab_bar_rect, &tabs, app.active_tool_index(), app.icon_font.as_ref()) {
             if let Some(tool) = Tool::from_index(clicked) {
+                // Open browser on first World Editor visit
+                if tool == Tool::WorldEditor && world_editor_first_open {
+                    world_editor_first_open = false;
+                    let levels = discover_examples();
+                    app.world_editor.example_browser.open(levels);
+                }
                 app.set_active_tool(tool);
             }
         }
@@ -241,6 +245,14 @@ async fn main() {
                                 ws.editor_state.set_status(&format!("Opened: {}", name), 3.0);
                                 ws.example_browser.close();
                             }
+                        }
+                        BrowserAction::NewLevel => {
+                            // Start with a fresh empty level
+                            let new_level = create_empty_level();
+                            ws.editor_state = editor::EditorState::new(new_level);
+                            ws.editor_layout.apply_config(&ws.editor_state.level.editor_layout);
+                            ws.editor_state.set_status("New level created", 3.0);
+                            ws.example_browser.close();
                         }
                         BrowserAction::Cancel => {
                             ws.example_browser.close();

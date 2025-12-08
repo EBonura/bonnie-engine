@@ -143,6 +143,9 @@ fn draw_unified_toolbar(ctx: &mut UiContext, rect: Rect, state: &mut EditorState
         if toolbar.icon_button(ctx, icon::SAVE, icon_font, "Save") {
             action = EditorAction::Save;
         }
+        if toolbar.icon_button(ctx, icon::SAVE_AS, icon_font, "Save As") {
+            action = EditorAction::SaveAs;
+        }
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -928,11 +931,9 @@ fn calculate_properties_content_height(selection: &super::Selection, state: &Edi
 fn draw_status_bar(rect: Rect, state: &EditorState) {
     draw_rectangle(rect.x.floor(), rect.y.floor(), rect.w, rect.h, Color::from_rgba(40, 40, 45, 255));
 
-    // Show status message in center if available
+    // Show status message on the left if available
     if let Some(msg) = state.get_status() {
-        let msg_width = msg.len() as f32 * 8.0;
-        let center_x = rect.x + rect.w * 0.5 - msg_width * 0.5;
-        draw_text(&msg, center_x.floor(), (rect.y + 15.0).floor(), 16.0, Color::from_rgba(100, 255, 100, 255));
+        draw_text(&msg, (rect.x + 10.0).floor(), (rect.y + 15.0).floor(), 16.0, Color::from_rgba(100, 255, 100, 255));
     }
 
     // Show keyboard shortcuts hint on the right (platform-specific)
