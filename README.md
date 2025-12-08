@@ -29,7 +29,8 @@ Answer the question: **"How would a Souls-like have looked on a PS1?"**
 - **Affine texture mapping** - Characteristic warpy textures
 - **Vertex snapping** - Jittery vertices at low precision
 - **Gouraud shading** - Smooth per-vertex lighting
-- **Low resolution** - Native 320x240 rendering
+- **Low resolution** - Native 320x240 rendering (toggleable)
+- **Aspect ratio toggle** - Switch between 4:3 and viewport-native aspect ratio
 - **No perspective correction** - True to PS1 hardware limitations
 
 ### TR1-Style Level System
@@ -181,7 +182,7 @@ This project uses the following free texture packs:
 
 ### Rendering Pipeline
 
-- [ ] Add aspect ratio toggle: Currently locked to PS1 4:3 (320x240), add icon to toggle full available space (affects World Editor and Modeler)
+- [x] ~~Add aspect ratio toggle: Currently locked to PS1 4:3 (320x240), add icon to toggle full available space (affects World Editor and Modeler)~~
 
 ---
 
