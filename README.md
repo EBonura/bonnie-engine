@@ -208,12 +208,7 @@ This project uses the following free texture packs:
 - **Note-off**: Apostrophe key (`)
 
 #### High Priority (Bugs)
-- [ ] Fix left-side knob reset bug: Knobs reset to max value when dragged on left side
-- [ ] Thicken knob perimeter: Circle outline too thin for easy reading
 - [ ] Configurable pattern length: Currently hardcoded to 64 rows - should be adjustable
-- [ ] Fix Pause icon: Currently shows pen icon instead of pause
-- [ ] Fix Arrangement icon: Shows lock instead of arrangement-related icon
-- [ ] Fix Instruments icon: Shows rotating arrow - need better icon (piano/synth?)
 
 #### Medium Priority
 - [ ] Add per-note vs channel FX toggle: At top of each channel, toggle between per-note FX or channel-wide FX (with greyed-out section when not active)

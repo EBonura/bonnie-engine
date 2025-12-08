@@ -710,39 +710,64 @@ impl TrackerState {
     pub fn key_to_note(key: macroquad::prelude::KeyCode, octave: u8) -> Option<u8> {
         use macroquad::prelude::KeyCode;
 
-        // Piano keyboard layout:
-        // Bottom row: Z S X D C V G B H N J M (C to B)
-        // Top row: Q 2 W 3 E R 5 T 6 Y 7 U (C+1 octave to B+1)
+        // Piano keyboard layout - continuous across two rows:
+        //
+        // Bottom row (semitones 0-16):  S D   G H J   L ;
+        //                              Z X C V B N M , . /
+        //                              C D E F G A B C D E
+        //
+        // Top row (semitones 17-36):   2 3   5 6 7   9 0   =  \
+        //                             Q W E R T Y U I O P [ ] \
+        //                             F G A B C D E F G A B C
+        //
+        // The top row CONTINUES from where bottom row ends (no overlap)
+        //
         let base_note = octave * 12;
 
         let note_offset = match key {
-            // Bottom row - lower octave
-            KeyCode::Z => Some(0),  // C
-            KeyCode::S => Some(1),  // C#
-            KeyCode::X => Some(2),  // D
-            KeyCode::D => Some(3),  // D#
-            KeyCode::C => Some(4),  // E
-            KeyCode::V => Some(5),  // F
-            KeyCode::G => Some(6),  // F#
-            KeyCode::B => Some(7),  // G
-            KeyCode::H => Some(8),  // G#
-            KeyCode::N => Some(9),  // A
-            KeyCode::J => Some(10), // A#
-            KeyCode::M => Some(11), // B
+            // Bottom row: Z to / (semitones 0-16: C to E, ~1.5 octaves)
+            KeyCode::Z => Some(0),   // C
+            KeyCode::S => Some(1),   // C#
+            KeyCode::X => Some(2),   // D
+            KeyCode::D => Some(3),   // D#
+            KeyCode::C => Some(4),   // E
+            KeyCode::V => Some(5),   // F
+            KeyCode::G => Some(6),   // F#
+            KeyCode::B => Some(7),   // G
+            KeyCode::H => Some(8),   // G#
+            KeyCode::N => Some(9),   // A
+            KeyCode::J => Some(10),  // A#
+            KeyCode::M => Some(11),  // B
+            KeyCode::Comma => Some(12),  // C
+            KeyCode::L => Some(13),  // C#
+            KeyCode::Period => Some(14), // D
+            KeyCode::Semicolon => Some(15), // D#
+            KeyCode::Slash => Some(16), // E
 
-            // Top row - upper octave
-            KeyCode::Q => Some(12), // C
-            KeyCode::Key2 => Some(13), // C#
-            KeyCode::W => Some(14), // D
-            KeyCode::Key3 => Some(15), // D#
-            KeyCode::E => Some(16), // E
-            KeyCode::R => Some(17), // F
-            KeyCode::Key5 => Some(18), // F#
-            KeyCode::T => Some(19), // G
-            KeyCode::Key6 => Some(20), // G#
-            KeyCode::Y => Some(21), // A
-            KeyCode::Key7 => Some(22), // A#
-            KeyCode::U => Some(23), // B
+            // Top row: Q to ] (semitones 17-36: F to C, continues from bottom row)
+            // Pattern:  2  3  4     5  6  7     9  0  -
+            //          Q  W  E  R  T  Y  U  I  O  P  [  ]
+            //          F  G  A  B  C  D  E  F  G  A  A# C
+            KeyCode::Q => Some(17),  // F
+            KeyCode::Key2 => Some(18), // F#
+            KeyCode::W => Some(19),  // G
+            KeyCode::Key3 => Some(20), // G#
+            KeyCode::E => Some(21),  // A
+            KeyCode::Key4 => Some(22), // A#
+            KeyCode::R => Some(23),  // B
+            KeyCode::T => Some(24),  // C
+            KeyCode::Key5 => Some(25), // C#
+            KeyCode::Y => Some(26),  // D
+            KeyCode::Key6 => Some(27), // D#
+            KeyCode::U => Some(28),  // E
+            KeyCode::I => Some(29),  // F
+            KeyCode::Key8 => Some(30), // F#
+            KeyCode::O => Some(31),  // G
+            KeyCode::Key9 => Some(32), // G#
+            KeyCode::P => Some(33),  // A
+            KeyCode::Key0 => Some(34), // A#
+            KeyCode::LeftBracket => Some(35), // B
+            KeyCode::RightBracket => Some(36), // C
 
             _ => None,
         };

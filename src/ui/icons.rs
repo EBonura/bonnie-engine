@@ -17,7 +17,7 @@ pub mod icon {
 
     // Playback / Transport
     pub const PLAY: char = '\u{e13c}';
-    pub const PAUSE: char = '\u{e131}';
+    pub const PAUSE: char = '\u{e12e}';
     pub const SQUARE: char = '\u{e167}';      // Stop (also used as shape)
     pub const SKIP_BACK: char = '\u{e15f}';   // Rewind to start
     pub const SKIP_FORWARD: char = '\u{e160}';
@@ -50,8 +50,8 @@ pub mod icon {
 
     // Music editor
     pub const MUSIC: char = '\u{e122}';       // Music/notes
-    pub const PIANO: char = '\u{e2ea}';       // Piano (keyboard icon)
-    pub const LIST_MUSIC: char = '\u{e10b}';  // Arrangement/playlist
+    pub const PIANO: char = '\u{e561}';       // Piano (keyboard icon)
+    pub const NOTEBOOK_PEN: char = '\u{e596}'; // Arrangement/playlist
 
     // Tab bar icons
     pub const HOUSE: char = '\u{e0f5}';           // Home tab
