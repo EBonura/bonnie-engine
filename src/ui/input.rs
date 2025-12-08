@@ -114,7 +114,11 @@ impl UiContext {
     }
 
     /// Set tooltip to show (call from widget when hovered)
+    /// Ignored when a modal is active (background widgets shouldn't show tooltips)
     pub fn set_tooltip(&mut self, text: &str, x: f32, y: f32) {
+        if self.modal_active {
+            return;
+        }
         self.tooltip = Some(PendingTooltip {
             text: text.to_string(),
             x,
