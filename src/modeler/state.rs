@@ -166,9 +166,13 @@ pub struct ModelerState {
     pub tool: TransformTool,
     pub selection: ModelerSelection,
 
-    // Camera
+    // Camera (orbit mode)
     pub camera: Camera,
     pub raster_settings: RasterSettings,
+    pub orbit_target: Vec3,      // Point the camera orbits around
+    pub orbit_distance: f32,     // Distance from target
+    pub orbit_azimuth: f32,      // Horizontal angle (radians)
+    pub orbit_elevation: f32,    // Vertical angle (radians)
 
     // UV Editor state
     pub uv_zoom: f32,
@@ -209,11 +213,14 @@ pub struct ModelerState {
 
 impl ModelerState {
     pub fn new() -> Self {
+        // Orbit camera setup
+        let orbit_target = Vec3::new(0.0, 50.0, 0.0); // Center of scene, slightly elevated
+        let orbit_distance = 400.0;
+        let orbit_azimuth = 0.8;      // ~45 degrees
+        let orbit_elevation = 0.3;    // ~17 degrees up
+
         let mut camera = Camera::new();
-        camera.position = Vec3::new(200.0, 150.0, -300.0);
-        camera.rotation_x = 0.3;
-        camera.rotation_y = 0.8; // Rotated ~90 degrees right to face the cube
-        camera.update_basis();
+        Self::update_camera_from_orbit(&mut camera, orbit_target, orbit_distance, orbit_azimuth, orbit_elevation);
 
         Self {
             model: Model::test_cube(),
@@ -226,6 +233,10 @@ impl ModelerState {
 
             camera,
             raster_settings: RasterSettings::default(),
+            orbit_target,
+            orbit_distance,
+            orbit_azimuth,
+            orbit_elevation,
 
             uv_zoom: 1.0,
             uv_offset: Vec2::default(),
@@ -256,6 +267,41 @@ impl ModelerState {
             viewport_last_mouse: (0.0, 0.0),
             viewport_mouse_captured: false,
         }
+    }
+
+    /// Update camera position and orientation from orbit parameters
+    fn update_camera_from_orbit(camera: &mut Camera, target: Vec3, distance: f32, azimuth: f32, elevation: f32) {
+        // Spherical to Cartesian conversion
+        // azimuth: angle around Y axis (0 = looking from +Z toward origin)
+        // elevation: angle above horizontal plane
+        let cos_elev = elevation.cos();
+        let sin_elev = elevation.sin();
+        let cos_az = azimuth.cos();
+        let sin_az = azimuth.sin();
+
+        // Camera position relative to target
+        let offset = Vec3::new(
+            distance * cos_elev * sin_az,
+            distance * sin_elev,
+            distance * cos_elev * cos_az,
+        );
+        camera.position = target + offset;
+
+        // Point camera at target
+        camera.rotation_x = -elevation;
+        camera.rotation_y = azimuth + std::f32::consts::PI;
+        camera.update_basis();
+    }
+
+    /// Update the camera from current orbit state
+    pub fn sync_camera_from_orbit(&mut self) {
+        Self::update_camera_from_orbit(
+            &mut self.camera,
+            self.orbit_target,
+            self.orbit_distance,
+            self.orbit_azimuth,
+            self.orbit_elevation,
+        );
     }
 
     /// Set a status message that will be displayed for a duration

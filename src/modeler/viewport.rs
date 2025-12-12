@@ -174,48 +174,39 @@ pub fn draw_modeler_viewport(
         }
     };
 
-    // Camera rotation with right mouse button (orbit)
-    if ctx.mouse.right_down && inside_viewport {
+    // Orbit camera controls
+    let shift_held = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
+
+    // Right mouse drag: rotate around target (or pan if Shift held)
+    if ctx.mouse.right_down && (inside_viewport || state.viewport_mouse_captured) {
         if state.viewport_mouse_captured {
-            let dx = (mouse_pos.1 - state.viewport_last_mouse.1) * 0.005;
-            let dy = -(mouse_pos.0 - state.viewport_last_mouse.0) * 0.005;
-            state.camera.rotate(dx, dy);
+            let dx = mouse_pos.0 - state.viewport_last_mouse.0;
+            let dy = mouse_pos.1 - state.viewport_last_mouse.1;
+
+            if shift_held {
+                // Shift+Right drag: pan the orbit target
+                let pan_speed = state.orbit_distance * 0.002; // Scale with distance
+                state.orbit_target = state.orbit_target - state.camera.basis_x * dx * pan_speed;
+                state.orbit_target = state.orbit_target + state.camera.basis_y * dy * pan_speed;
+            } else {
+                // Right drag: rotate around target
+                state.orbit_azimuth += dx * 0.005;
+                state.orbit_elevation = (state.orbit_elevation + dy * 0.005).clamp(-1.4, 1.4);
+            }
+            state.sync_camera_from_orbit();
         }
         state.viewport_mouse_captured = true;
     } else if !ctx.mouse.right_down {
         state.viewport_mouse_captured = false;
     }
 
-    // Keyboard camera movement (WASD + Q/E)
-    let move_speed = 10.0; // Smaller scale for models
-    if inside_viewport || state.viewport_mouse_captured {
-        if is_key_down(KeyCode::W) {
-            state.camera.position = state.camera.position + state.camera.basis_z * move_speed;
-        }
-        if is_key_down(KeyCode::S) && !is_key_down(KeyCode::LeftControl) && !is_key_down(KeyCode::RightControl) {
-            state.camera.position = state.camera.position - state.camera.basis_z * move_speed;
-        }
-        if is_key_down(KeyCode::A) {
-            state.camera.position = state.camera.position - state.camera.basis_x * move_speed;
-        }
-        if is_key_down(KeyCode::D) {
-            state.camera.position = state.camera.position + state.camera.basis_x * move_speed;
-        }
-        if is_key_down(KeyCode::Q) {
-            state.camera.position = state.camera.position - state.camera.basis_y * move_speed;
-        }
-        if is_key_down(KeyCode::E) {
-            state.camera.position = state.camera.position + state.camera.basis_y * move_speed;
-        }
-    }
-
-    // Mouse wheel zoom
+    // Mouse wheel: zoom in/out (change orbit distance)
     if inside_viewport {
         let scroll = mouse_wheel().1;
         if scroll != 0.0 {
-            let zoom_speed = 20.0;
-            let zoom_dir = if scroll > 0.0 { 1.0 } else { -1.0 };
-            state.camera.position = state.camera.position + state.camera.basis_z * zoom_speed * zoom_dir;
+            let zoom_factor = if scroll > 0.0 { 0.9 } else { 1.1 };
+            state.orbit_distance = (state.orbit_distance * zoom_factor).clamp(50.0, 2000.0);
+            state.sync_camera_from_orbit();
         }
     }
 
