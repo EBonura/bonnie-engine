@@ -3,6 +3,135 @@
 use macroquad::prelude::*;
 use super::{Rect, UiContext, draw_icon_centered};
 
+// =============================================================================
+// Scrollable List Widget
+// =============================================================================
+
+/// Colors for the scrollable list
+pub struct ListColors {
+    pub row_even: Color,
+    pub row_odd: Color,
+    pub row_selected: Color,
+    pub row_hovered: Color,
+    pub text_normal: Color,
+    pub text_selected: Color,
+}
+
+impl Default for ListColors {
+    fn default() -> Self {
+        Self {
+            row_even: Color::new(0.13, 0.13, 0.15, 1.0),
+            row_odd: Color::new(0.11, 0.11, 0.13, 1.0),
+            row_selected: ACCENT_COLOR,
+            row_hovered: Color::new(0.20, 0.20, 0.24, 1.0),
+            text_normal: Color::new(0.78, 0.78, 0.78, 1.0),
+            text_selected: WHITE,
+        }
+    }
+}
+
+/// Result from drawing a scrollable list
+pub struct ListResult {
+    /// Index of clicked item (if any)
+    pub clicked: Option<usize>,
+    /// Index of double-clicked item (if any)
+    pub double_clicked: Option<usize>,
+}
+
+/// Draw a scrollable list with alternating row colors
+///
+/// - `ctx`: UI context for input handling
+/// - `rect`: Bounding rectangle for the list
+/// - `items`: Slice of item labels to display
+/// - `selected`: Currently selected index (if any)
+/// - `scroll_offset`: Mutable scroll offset (will be updated on scroll)
+/// - `row_height`: Height of each row
+/// - `colors`: Optional custom colors (uses default if None)
+///
+/// Returns clicked/double-clicked indices
+pub fn draw_scrollable_list(
+    ctx: &mut UiContext,
+    rect: Rect,
+    items: &[String],
+    selected: Option<usize>,
+    scroll_offset: &mut f32,
+    row_height: f32,
+    colors: Option<&ListColors>,
+) -> ListResult {
+    let default_colors = ListColors::default();
+    let colors = colors.unwrap_or(&default_colors);
+
+    let mut result = ListResult {
+        clicked: None,
+        double_clicked: None,
+    };
+
+    // Handle scrolling
+    if ctx.mouse.inside(&rect) {
+        let scroll_delta = mouse_wheel().1 * 30.0;
+        let max_scroll = (items.len() as f32 * row_height - rect.h).max(0.0);
+        *scroll_offset = (*scroll_offset - scroll_delta).clamp(0.0, max_scroll);
+    }
+
+    // Calculate visible range
+    let start_idx = (*scroll_offset / row_height).floor() as usize;
+    let visible_count = (rect.h / row_height).ceil() as usize + 1;
+    let end_idx = (start_idx + visible_count).min(items.len());
+
+    // Draw visible items
+    for i in start_idx..end_idx {
+        let y = rect.y + (i as f32 * row_height) - *scroll_offset;
+
+        // Skip if outside visible area
+        if y + row_height < rect.y || y > rect.bottom() {
+            continue;
+        }
+
+        let item_rect = Rect::new(rect.x, y, rect.w, row_height);
+        let is_selected = selected == Some(i);
+        let is_hovered = ctx.mouse.inside(&item_rect) && ctx.mouse.inside(&rect);
+
+        // Row background
+        let bg_color = if is_selected {
+            colors.row_selected
+        } else if is_hovered {
+            colors.row_hovered
+        } else if i % 2 == 0 {
+            colors.row_even
+        } else {
+            colors.row_odd
+        };
+        draw_rectangle(item_rect.x, item_rect.y, item_rect.w, item_rect.h, bg_color);
+
+        // Text
+        let text_color = if is_selected { colors.text_selected } else { colors.text_normal };
+        let text_y = y + (row_height + 12.0) / 2.0; // Approximate vertical centering for 12px font
+        draw_text(&items[i], rect.x + 8.0, text_y, 14.0, text_color);
+
+        // Click handling
+        if is_hovered && ctx.mouse.left_pressed {
+            result.clicked = Some(i);
+        }
+    }
+
+    // Draw scrollbar if needed
+    let total_height = items.len() as f32 * row_height;
+    if total_height > rect.h {
+        let scrollbar_w = 6.0;
+        let scrollbar_x = rect.right() - scrollbar_w - 2.0;
+        let scrollbar_h = (rect.h / total_height * rect.h).max(20.0);
+        let max_scroll = total_height - rect.h;
+        let scrollbar_y = rect.y + (*scroll_offset / max_scroll) * (rect.h - scrollbar_h);
+
+        // Scrollbar track
+        draw_rectangle(scrollbar_x, rect.y, scrollbar_w, rect.h, Color::new(0.08, 0.08, 0.1, 1.0));
+        // Scrollbar thumb
+        draw_rectangle(scrollbar_x, scrollbar_y, scrollbar_w, scrollbar_h, Color::new(0.3, 0.3, 0.35, 1.0));
+    }
+
+    result
+}
+
 // Platform-specific URL opening
 #[cfg(not(target_arch = "wasm32"))]
 fn open_url(url: &str) {

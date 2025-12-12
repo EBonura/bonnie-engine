@@ -362,7 +362,18 @@ impl EditorState {
     }
 
     /// Toggle a selection in the multi-selection list
+    /// Also ensures the current primary selection is in multi_selection
+    /// (so Shift+click after a regular click keeps the first item selected)
     pub fn toggle_multi_selection(&mut self, selection: Selection) {
+        // First, ensure the current primary selection is in multi_selection
+        // This handles the case where user clicks A, then Shift+clicks B
+        if !matches!(self.selection, Selection::None) {
+            if !self.multi_selection.iter().any(|s| s == &self.selection) {
+                self.multi_selection.push(self.selection.clone());
+            }
+        }
+
+        // Now toggle the new selection
         if let Some(pos) = self.multi_selection.iter().position(|s| s == &selection) {
             self.multi_selection.remove(pos);
         } else if !matches!(selection, Selection::None) {

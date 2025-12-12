@@ -3,7 +3,7 @@
 //! Modal dialog for browsing and previewing bundled example levels.
 
 use macroquad::prelude::*;
-use crate::ui::{Rect, UiContext, draw_icon_centered, ACCENT_COLOR};
+use crate::ui::{Rect, UiContext, draw_icon_centered, draw_scrollable_list, ACCENT_COLOR};
 use crate::world::Level;
 use crate::rasterizer::{Framebuffer, Texture as RasterTexture, Camera, render_mesh, Color as RasterColor, Vec3, RasterSettings};
 use super::example_levels::{ExampleLevelInfo, LevelStats, get_level_stats};
@@ -154,6 +154,8 @@ pub enum BrowserAction {
     SelectPreview(usize),
     /// User wants to open the selected level
     OpenLevel,
+    /// User wants to start with a new empty level
+    NewLevel,
     /// User cancelled
     Cancel,
 }
@@ -202,48 +204,29 @@ pub fn draw_example_browser(
     let content_h = dialog_h - header_h - 60.0; // Leave room for footer
     let list_w = 200.0;
 
-    // List panel (left)
+    // List panel (left) - use reusable scrollable list widget
     let list_rect = Rect::new(dialog_x + 8.0, content_y, list_w, content_h);
-    draw_rectangle(list_rect.x, list_rect.y, list_rect.w, list_rect.h, Color::from_rgba(25, 25, 30, 255));
+    let item_h = 28.0;
 
-    // Draw level list
-    let item_h = 32.0;
-    let mut y = list_rect.y + 4.0 - browser.scroll_offset;
+    // Convert examples to string labels
+    let items: Vec<String> = browser.examples.iter().map(|e| e.name.clone()).collect();
 
-    for (i, example) in browser.examples.iter().enumerate() {
-        if y + item_h > list_rect.y && y < list_rect.bottom() {
-            let item_rect = Rect::new(list_rect.x + 4.0, y, list_rect.w - 8.0, item_h);
-            let is_selected = browser.selected_index == Some(i);
-            let is_hovered = ctx.mouse.inside(&item_rect) && ctx.mouse.inside(&list_rect);
+    let list_result = draw_scrollable_list(
+        ctx,
+        list_rect,
+        &items,
+        browser.selected_index,
+        &mut browser.scroll_offset,
+        item_h,
+        None, // Use default colors
+    );
 
-            // Background
-            if is_selected {
-                draw_rectangle(item_rect.x, item_rect.y, item_rect.w, item_rect.h, ACCENT_COLOR);
-            } else if is_hovered {
-                draw_rectangle(item_rect.x, item_rect.y, item_rect.w, item_rect.h, Color::from_rgba(50, 50, 60, 255));
-            }
-
-            // Text
-            let text_color = if is_selected { WHITE } else { Color::from_rgba(200, 200, 200, 255) };
-            draw_text(&example.name, item_rect.x + 8.0, item_rect.y + 22.0, 16.0, text_color);
-
-            // Click handling
-            if is_hovered && ctx.mouse.left_pressed {
-                if browser.selected_index != Some(i) {
-                    browser.selected_index = Some(i);
-                    action = BrowserAction::SelectPreview(i);
-                }
-            }
+    // Handle list click
+    if let Some(clicked_idx) = list_result.clicked {
+        if browser.selected_index != Some(clicked_idx) {
+            browser.selected_index = Some(clicked_idx);
+            action = BrowserAction::SelectPreview(clicked_idx);
         }
-        y += item_h;
-    }
-
-    // Handle scroll in list
-    if ctx.mouse.inside(&list_rect) {
-        let scroll_delta = mouse_wheel().1 * 30.0;
-        browser.scroll_offset = (browser.scroll_offset - scroll_delta)
-            .max(0.0)
-            .min((browser.examples.len() as f32 * item_h - content_h).max(0.0));
     }
 
     // Preview panel (right)
@@ -282,6 +265,12 @@ pub fn draw_example_browser(
     // Footer with buttons
     let footer_y = dialog_y + dialog_h - 44.0;
     draw_rectangle(dialog_x, footer_y, dialog_w, 44.0, Color::from_rgba(40, 40, 48, 255));
+
+    // New button (left side) - start with empty level
+    let new_rect = Rect::new(dialog_x + 10.0, footer_y + 8.0, 80.0, 28.0);
+    if draw_text_button(ctx, new_rect, "New", Color::from_rgba(60, 60, 70, 255)) {
+        action = BrowserAction::NewLevel;
+    }
 
     // Cancel button
     let cancel_rect = Rect::new(dialog_x + dialog_w - 180.0, footer_y + 8.0, 80.0, 28.0);
