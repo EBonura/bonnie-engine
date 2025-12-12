@@ -432,19 +432,25 @@ fn draw_container_start(
 fn horizontal_face_container_height(face: &crate::world::HorizontalFace) -> f32 {
     let line_height = 18.0;
     let header_height = 22.0;
+    let button_row_height = 24.0;
     let mut lines = 3; // texture, height, walkable
     if !face.is_flat() {
         lines += 1; // extra line for individual heights
     }
-    header_height + CONTAINER_PADDING * 2.0 + (lines as f32) * line_height
+    // Add space for UV info and buttons
+    let uv_lines = if face.uv.is_some() { 2 } else { 1 }; // "Custom UVs" or "Default UVs" + button row
+    header_height + CONTAINER_PADDING * 2.0 + (lines as f32) * line_height + (uv_lines as f32) * line_height + button_row_height
 }
 
 /// Calculate height needed for a wall face container
-fn wall_face_container_height(_wall: &crate::world::VerticalFace) -> f32 {
+fn wall_face_container_height(wall: &crate::world::VerticalFace) -> f32 {
     let line_height = 18.0;
     let header_height = 22.0;
+    let button_row_height = 24.0;
     let lines = 3; // texture, y range, blend
-    header_height + CONTAINER_PADDING * 2.0 + (lines as f32) * line_height
+    // Add space for UV info and buttons
+    let uv_lines = if wall.uv.is_some() { 2 } else { 1 }; // "Custom UVs" or "Default UVs" + button row
+    header_height + CONTAINER_PADDING * 2.0 + (lines as f32) * line_height + (uv_lines as f32) * line_height + button_row_height
 }
 
 /// Draw properties for a horizontal face inside a container
@@ -512,18 +518,158 @@ fn draw_horizontal_face_container(
             }
         }
     }
+    content_y += line_height;
+
+    // UV coordinates display
+    let uv_label_color = Color::from_rgba(150, 150, 150, 255);
+    if let Some(uv) = &face.uv {
+        draw_text("UV: Custom", content_x.floor(), (content_y + 12.0).floor(), 13.0, uv_label_color);
+        content_y += line_height;
+        // Show UV coordinates compactly
+        draw_text(&format!("  [{:.2},{:.2}] [{:.2},{:.2}]", uv[0].x, uv[0].y, uv[1].x, uv[1].y),
+            content_x.floor(), (content_y + 12.0).floor(), 11.0, Color::from_rgba(120, 120, 120, 255));
+        content_y += line_height;
+    } else {
+        draw_text("UV: Default", content_x.floor(), (content_y + 12.0).floor(), 13.0, uv_label_color);
+        content_y += line_height;
+    }
+
+    // UV manipulation buttons
+    let btn_size = 20.0;
+    let btn_spacing = 4.0;
+    let mut btn_x = content_x;
+
+    // Reset UV button
+    let reset_rect = Rect::new(btn_x, content_y, btn_size, btn_size);
+    if crate::ui::icon_button(ctx, reset_rect, icon::REFRESH_CW, icon_font, "Reset UV") {
+        state.save_undo();
+        if let Some(r) = state.level.rooms.get_mut(room_idx) {
+            if let Some(s) = r.get_sector_mut(gx, gz) {
+                if is_floor {
+                    if let Some(f) = &mut s.floor { f.uv = None; }
+                } else if let Some(c) = &mut s.ceiling { c.uv = None; }
+            }
+        }
+    }
+    btn_x += btn_size + btn_spacing;
+
+    // Flip Horizontal button
+    let flip_h_rect = Rect::new(btn_x, content_y, btn_size, btn_size);
+    if crate::ui::icon_button(ctx, flip_h_rect, icon::FLIP_HORIZONTAL, icon_font, "Flip UV Horizontal") {
+        state.save_undo();
+        if let Some(r) = state.level.rooms.get_mut(room_idx) {
+            if let Some(s) = r.get_sector_mut(gx, gz) {
+                if is_floor {
+                    if let Some(f) = &mut s.floor { flip_uv_horizontal(&mut f.uv); }
+                } else if let Some(c) = &mut s.ceiling { flip_uv_horizontal(&mut c.uv); }
+            }
+        }
+    }
+    btn_x += btn_size + btn_spacing;
+
+    // Flip Vertical button
+    let flip_v_rect = Rect::new(btn_x, content_y, btn_size, btn_size);
+    if crate::ui::icon_button(ctx, flip_v_rect, icon::FLIP_VERTICAL, icon_font, "Flip UV Vertical") {
+        state.save_undo();
+        if let Some(r) = state.level.rooms.get_mut(room_idx) {
+            if let Some(s) = r.get_sector_mut(gx, gz) {
+                if is_floor {
+                    if let Some(f) = &mut s.floor { flip_uv_vertical(&mut f.uv); }
+                } else if let Some(c) = &mut s.ceiling { flip_uv_vertical(&mut c.uv); }
+            }
+        }
+    }
+    btn_x += btn_size + btn_spacing;
+
+    // Rotate 90° CW button
+    let rotate_rect = Rect::new(btn_x, content_y, btn_size, btn_size);
+    if crate::ui::icon_button(ctx, rotate_rect, icon::ROTATE_CW, icon_font, "Rotate UV 90° CW") {
+        state.save_undo();
+        if let Some(r) = state.level.rooms.get_mut(room_idx) {
+            if let Some(s) = r.get_sector_mut(gx, gz) {
+                if is_floor {
+                    if let Some(f) = &mut s.floor { rotate_uv_cw(&mut f.uv); }
+                } else if let Some(c) = &mut s.ceiling { rotate_uv_cw(&mut c.uv); }
+            }
+        }
+    }
 
     container_height
 }
 
+/// Helper: Flip UV coordinates horizontally
+fn flip_uv_horizontal(uv: &mut Option<[crate::rasterizer::Vec2; 4]>) {
+    use crate::rasterizer::Vec2;
+    let current = uv.unwrap_or([
+        Vec2::new(0.0, 0.0),
+        Vec2::new(1.0, 0.0),
+        Vec2::new(1.0, 1.0),
+        Vec2::new(0.0, 1.0),
+    ]);
+    // Flip X: swap left and right
+    *uv = Some([
+        Vec2::new(1.0 - current[0].x, current[0].y),
+        Vec2::new(1.0 - current[1].x, current[1].y),
+        Vec2::new(1.0 - current[2].x, current[2].y),
+        Vec2::new(1.0 - current[3].x, current[3].y),
+    ]);
+}
+
+/// Helper: Flip UV coordinates vertically
+fn flip_uv_vertical(uv: &mut Option<[crate::rasterizer::Vec2; 4]>) {
+    use crate::rasterizer::Vec2;
+    let current = uv.unwrap_or([
+        Vec2::new(0.0, 0.0),
+        Vec2::new(1.0, 0.0),
+        Vec2::new(1.0, 1.0),
+        Vec2::new(0.0, 1.0),
+    ]);
+    // Flip Y: swap top and bottom
+    *uv = Some([
+        Vec2::new(current[0].x, 1.0 - current[0].y),
+        Vec2::new(current[1].x, 1.0 - current[1].y),
+        Vec2::new(current[2].x, 1.0 - current[2].y),
+        Vec2::new(current[3].x, 1.0 - current[3].y),
+    ]);
+}
+
+/// Helper: Rotate UV coordinates 90° clockwise
+/// This rotates the texture appearance by shifting which UV goes to which corner
+fn rotate_uv_cw(uv: &mut Option<[crate::rasterizer::Vec2; 4]>) {
+    use crate::rasterizer::Vec2;
+    let current = uv.unwrap_or([
+        Vec2::new(0.0, 0.0),  // corner 0: NW
+        Vec2::new(1.0, 0.0),  // corner 1: NE
+        Vec2::new(1.0, 1.0),  // corner 2: SE
+        Vec2::new(0.0, 1.0),  // corner 3: SW
+    ]);
+    // To rotate the texture 90° CW, each corner gets the UV from the previous corner
+    // (i.e., shift the array by 1 position backwards)
+    // corner 0 gets corner 3's UV, corner 1 gets corner 0's UV, etc.
+    *uv = Some([
+        current[3],  // corner 0 now shows what was at corner 3
+        current[0],  // corner 1 now shows what was at corner 0
+        current[1],  // corner 2 now shows what was at corner 1
+        current[2],  // corner 3 now shows what was at corner 2
+    ]);
+}
+
 /// Draw properties for a wall face inside a container
 fn draw_wall_face_container(
+    ctx: &mut UiContext,
     x: f32,
     y: f32,
     width: f32,
     wall: &crate::world::VerticalFace,
     label: &str,
     label_color: Color,
+    room_idx: usize,
+    gx: usize,
+    gz: usize,
+    wall_dir: crate::world::Direction,
+    wall_idx: usize,
+    state: &mut EditorState,
+    icon_font: Option<&Font>,
 ) -> f32 {
     let line_height = 18.0;
     let header_height = 22.0;
@@ -551,6 +697,81 @@ fn draw_wall_face_container(
 
     // Blend mode
     draw_text(&format!("Blend: {:?}", wall.blend_mode), content_x.floor(), (content_y + 12.0).floor(), 13.0, Color::from_rgba(150, 150, 150, 255));
+    content_y += line_height;
+
+    // UV coordinates display
+    let uv_label_color = Color::from_rgba(150, 150, 150, 255);
+    if let Some(uv) = &wall.uv {
+        draw_text("UV: Custom", content_x.floor(), (content_y + 12.0).floor(), 13.0, uv_label_color);
+        content_y += line_height;
+        // Show UV coordinates compactly
+        draw_text(&format!("  [{:.2},{:.2}] [{:.2},{:.2}]", uv[0].x, uv[0].y, uv[1].x, uv[1].y),
+            content_x.floor(), (content_y + 12.0).floor(), 11.0, Color::from_rgba(120, 120, 120, 255));
+        content_y += line_height;
+    } else {
+        draw_text("UV: Default", content_x.floor(), (content_y + 12.0).floor(), 13.0, uv_label_color);
+        content_y += line_height;
+    }
+
+    // UV manipulation buttons
+    let btn_size = 20.0;
+    let btn_spacing = 4.0;
+    let mut btn_x = content_x;
+
+    // Reset UV button
+    let reset_rect = Rect::new(btn_x, content_y, btn_size, btn_size);
+    if crate::ui::icon_button(ctx, reset_rect, icon::REFRESH_CW, icon_font, "Reset UV") {
+        state.save_undo();
+        if let Some(r) = state.level.rooms.get_mut(room_idx) {
+            if let Some(s) = r.get_sector_mut(gx, gz) {
+                if let Some(w) = s.walls_mut(wall_dir).get_mut(wall_idx) {
+                    w.uv = None;
+                }
+            }
+        }
+    }
+    btn_x += btn_size + btn_spacing;
+
+    // Flip Horizontal button
+    let flip_h_rect = Rect::new(btn_x, content_y, btn_size, btn_size);
+    if crate::ui::icon_button(ctx, flip_h_rect, icon::FLIP_HORIZONTAL, icon_font, "Flip UV Horizontal") {
+        state.save_undo();
+        if let Some(r) = state.level.rooms.get_mut(room_idx) {
+            if let Some(s) = r.get_sector_mut(gx, gz) {
+                if let Some(w) = s.walls_mut(wall_dir).get_mut(wall_idx) {
+                    flip_uv_horizontal(&mut w.uv);
+                }
+            }
+        }
+    }
+    btn_x += btn_size + btn_spacing;
+
+    // Flip Vertical button
+    let flip_v_rect = Rect::new(btn_x, content_y, btn_size, btn_size);
+    if crate::ui::icon_button(ctx, flip_v_rect, icon::FLIP_VERTICAL, icon_font, "Flip UV Vertical") {
+        state.save_undo();
+        if let Some(r) = state.level.rooms.get_mut(room_idx) {
+            if let Some(s) = r.get_sector_mut(gx, gz) {
+                if let Some(w) = s.walls_mut(wall_dir).get_mut(wall_idx) {
+                    flip_uv_vertical(&mut w.uv);
+                }
+            }
+        }
+    }
+    btn_x += btn_size + btn_spacing;
+
+    // Rotate 90° CW button
+    let rotate_rect = Rect::new(btn_x, content_y, btn_size, btn_size);
+    if crate::ui::icon_button(ctx, rotate_rect, icon::ROTATE_CW, icon_font, "Rotate UV 90° CW") {
+        state.save_undo();
+        if let Some(r) = state.level.rooms.get_mut(room_idx) {
+            if let Some(s) = r.get_sector_mut(gx, gz) {
+                if let Some(w) = s.walls_mut(wall_dir).get_mut(wall_idx) {
+                    rotate_uv_cw(&mut w.uv);
+                }
+            }
+        }
+    }
 
     container_height
 }
@@ -637,25 +858,41 @@ fn draw_properties(ctx: &mut UiContext, rect: Rect, state: &mut EditorState, ico
                     }
                     super::SectorFace::WallNorth(i) => {
                         if let Some(wall) = sector.walls_north.get(*i) {
-                            let h = draw_wall_face_container(x, y, container_width, wall, "Wall (North)", Color::from_rgba(255, 180, 120, 255));
+                            let h = draw_wall_face_container(
+                                ctx, x, y, container_width, wall, "Wall (North)",
+                                Color::from_rgba(255, 180, 120, 255),
+                                *room, *gx, *gz, crate::world::Direction::North, *i, state, icon_font
+                            );
                             y += h + CONTAINER_MARGIN;
                         }
                     }
                     super::SectorFace::WallEast(i) => {
                         if let Some(wall) = sector.walls_east.get(*i) {
-                            let h = draw_wall_face_container(x, y, container_width, wall, "Wall (East)", Color::from_rgba(255, 180, 120, 255));
+                            let h = draw_wall_face_container(
+                                ctx, x, y, container_width, wall, "Wall (East)",
+                                Color::from_rgba(255, 180, 120, 255),
+                                *room, *gx, *gz, crate::world::Direction::East, *i, state, icon_font
+                            );
                             y += h + CONTAINER_MARGIN;
                         }
                     }
                     super::SectorFace::WallSouth(i) => {
                         if let Some(wall) = sector.walls_south.get(*i) {
-                            let h = draw_wall_face_container(x, y, container_width, wall, "Wall (South)", Color::from_rgba(255, 180, 120, 255));
+                            let h = draw_wall_face_container(
+                                ctx, x, y, container_width, wall, "Wall (South)",
+                                Color::from_rgba(255, 180, 120, 255),
+                                *room, *gx, *gz, crate::world::Direction::South, *i, state, icon_font
+                            );
                             y += h + CONTAINER_MARGIN;
                         }
                     }
                     super::SectorFace::WallWest(i) => {
                         if let Some(wall) = sector.walls_west.get(*i) {
-                            let h = draw_wall_face_container(x, y, container_width, wall, "Wall (West)", Color::from_rgba(255, 180, 120, 255));
+                            let h = draw_wall_face_container(
+                                ctx, x, y, container_width, wall, "Wall (West)",
+                                Color::from_rgba(255, 180, 120, 255),
+                                *room, *gx, *gz, crate::world::Direction::West, *i, state, icon_font
+                            );
                             y += h + CONTAINER_MARGIN;
                         }
                     }
@@ -696,21 +933,26 @@ fn draw_properties(ctx: &mut UiContext, rect: Rect, state: &mut EditorState, ico
                 }
 
                 // === WALLS ===
-                let wall_dirs: [(&str, &Vec<crate::world::VerticalFace>); 4] = [
-                    ("North", &sector.walls_north),
-                    ("East", &sector.walls_east),
-                    ("South", &sector.walls_south),
-                    ("West", &sector.walls_west),
+                use crate::world::Direction;
+                let wall_dirs: [(&str, &Vec<crate::world::VerticalFace>, Direction); 4] = [
+                    ("North", &sector.walls_north, Direction::North),
+                    ("East", &sector.walls_east, Direction::East),
+                    ("South", &sector.walls_south, Direction::South),
+                    ("West", &sector.walls_west, Direction::West),
                 ];
 
-                for (dir_name, walls) in wall_dirs {
+                for (dir_name, walls, dir) in wall_dirs {
                     for (i, wall) in walls.iter().enumerate() {
                         let label = if walls.len() == 1 {
                             format!("Wall ({})", dir_name)
                         } else {
                             format!("Wall ({}) [{}]", dir_name, i)
                         };
-                        let h = draw_wall_face_container(x, y, container_width, wall, &label, Color::from_rgba(255, 180, 120, 255));
+                        let h = draw_wall_face_container(
+                            ctx, x, y, container_width, wall, &label,
+                            Color::from_rgba(255, 180, 120, 255),
+                            *room, *gx, *gz, dir, i, state, icon_font
+                        );
                         y += h + CONTAINER_MARGIN;
                     }
                 }

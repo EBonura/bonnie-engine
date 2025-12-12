@@ -51,6 +51,7 @@ pub mod icon {
     pub const GIT_BRANCH: char = '\u{e1f4}';   // Hierarchy
     pub const SCAN: char = '\u{e257}';         // Face selection
     pub const CIRCLE_DOT: char = '\u{e345}';   // Vertex selection
+    pub const BONE: char = '\u{e358}';         // Bone selection
 
     // PS1 effect toggles
     pub const WAVES: char = '\u{e283}';       // Affine texture mapping (warpy)
@@ -74,6 +75,12 @@ pub mod icon {
 
     // Browser / Examples
     pub const BOOK_OPEN: char = '\u{e05f}';       // Examples browser
+
+    // UV editing
+    pub const FLIP_HORIZONTAL: char = '\u{e219}'; // flip-horizontal-2
+    pub const FLIP_VERTICAL: char = '\u{e21a}';   // flip-vertical-2
+    pub const ROTATE_CW: char = '\u{e147}';       // rotate-cw
+    pub const REFRESH_CW: char = '\u{e145}';      // refresh-cw (reset)
 }
 
 /// Draw a Lucide icon centered in a rect
