@@ -209,6 +209,7 @@ pub struct ModelerState {
     pub transform_active: bool,
     pub transform_start_mouse: (f32, f32),
     pub transform_start_positions: Vec<Vec3>,
+    pub transform_start_rotations: Vec<Vec3>,
     pub axis_lock: Option<Axis>,
 
     // Viewport mouse state
@@ -267,6 +268,7 @@ impl ModelerState {
             transform_active: false,
             transform_start_mouse: (0.0, 0.0),
             transform_start_positions: Vec::new(),
+            transform_start_rotations: Vec::new(),
             axis_lock: None,
 
             viewport_last_mouse: (0.0, 0.0),

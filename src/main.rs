@@ -34,6 +34,9 @@ fn window_conf() -> Conf {
         window_height: HEIGHT as i32 * 3,
         window_resizable: true,
         high_dpi: true,
+        // Start fullscreen on native, windowed on WASM (browser handles sizing)
+        #[cfg(not(target_arch = "wasm32"))]
+        fullscreen: true,
         icon: Some(miniquad::conf::Icon {
             small: *include_bytes!("../assets/icons/icon16.rgba"),
             medium: *include_bytes!("../assets/icons/icon32.rgba"),
@@ -53,6 +56,9 @@ async fn main() {
 
     // Mouse state tracking
     let mut last_left_down = false;
+    let mut last_right_down = false;
+    let mut last_click_time = 0.0f64;
+    let mut last_click_pos = (0.0f32, 0.0f32);
 
     // UI context
     let mut ui_ctx = UiContext::new();
@@ -95,16 +101,39 @@ async fn main() {
         // Update UI context with mouse state
         let mouse_pos = mouse_position();
         let left_down = is_mouse_button_down(MouseButton::Left);
+        // Detect double-click (300ms window, 10px radius)
+        let left_pressed = left_down && !last_left_down;
+        let current_time = get_time();
+        let double_click_threshold = 0.3; // 300ms
+        let double_click_radius = 10.0;
+        let double_clicked = if left_pressed {
+            let time_delta = current_time - last_click_time;
+            let dx = mouse_pos.0 - last_click_pos.0;
+            let dy = mouse_pos.1 - last_click_pos.1;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let is_double = time_delta < double_click_threshold && dist < double_click_radius;
+            last_click_time = current_time;
+            last_click_pos = mouse_pos;
+            is_double
+        } else {
+            false
+        };
+
+        let right_down = is_mouse_button_down(MouseButton::Right);
+        let right_pressed = right_down && !last_right_down;
         let mouse_state = MouseState {
             x: mouse_pos.0,
             y: mouse_pos.1,
             left_down,
-            right_down: is_mouse_button_down(MouseButton::Right),
-            left_pressed: left_down && !last_left_down,
+            right_down,
+            left_pressed,
             left_released: !left_down && last_left_down,
+            right_pressed,
             scroll: mouse_wheel().1,
+            double_clicked,
         };
         last_left_down = left_down;
+        last_right_down = right_down;
         ui_ctx.begin_frame(mouse_state);
 
         // Block background input if example browser modal is open

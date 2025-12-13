@@ -539,3 +539,160 @@ pub fn draw_knob(
         editing: start_editing,
     }
 }
+
+// =============================================================================
+// Drag Value Widget (for numeric input with drag-to-adjust)
+// =============================================================================
+
+/// Result from drawing a drag value widget
+pub struct DragValueResult {
+    /// New value if changed
+    pub value: Option<f32>,
+    /// Whether the widget is being dragged
+    pub dragging: bool,
+}
+
+/// Draw a compact drag value without label (for inline use)
+/// with optional text editing support. When editing_field matches field_id, shows text input.
+pub fn draw_drag_value_compact_editable(
+    ctx: &mut UiContext,
+    rect: Rect,
+    value: f32,
+    step: f32,
+    drag_id: u64,
+    is_dragging: &mut bool,
+    drag_start_value: &mut f32,
+    drag_start_x: &mut f32,
+    editing_field: Option<&mut Option<usize>>,
+    edit_state: Option<(&mut String, usize)>, // (buffer, field_id)
+) -> DragValueResult {
+    let hovered = ctx.mouse.inside(&rect);
+
+    // Check if this field is being edited
+    let is_editing = match (&editing_field, &edit_state) {
+        (Some(ef), Some((_, field_id))) => **ef == Some(*field_id),
+        _ => false,
+    };
+
+    // Colors
+    let bg_color = if is_editing {
+        Color::from_rgba(50, 60, 70, 255)
+    } else if *is_dragging {
+        Color::from_rgba(60, 60, 70, 255)
+    } else if hovered {
+        Color::from_rgba(50, 50, 55, 255)
+    } else {
+        Color::from_rgba(40, 40, 45, 255)
+    };
+    let border_color = if is_editing {
+        ACCENT_COLOR
+    } else {
+        Color::from_rgba(60, 60, 65, 255)
+    };
+    let value_color = if is_editing || *is_dragging { ACCENT_COLOR } else { WHITE };
+
+    // Draw background
+    draw_rectangle(rect.x, rect.y, rect.w, rect.h, bg_color);
+    draw_rectangle_lines(rect.x, rect.y, rect.w, rect.h, 1.0, border_color);
+
+    let mut new_value = None;
+
+    if is_editing {
+        // Text input mode
+        if let Some((buffer, field_id)) = edit_state {
+            if let Some(ef) = editing_field {
+                // Draw text buffer
+                let text_y = rect.y + rect.h * 0.5 + 4.0;
+                let display_text = if buffer.is_empty() { "0" } else { buffer.as_str() };
+                let text_dims = measure_text(display_text, None, 11, 1.0);
+                let text_x = rect.x + (rect.w - text_dims.width) * 0.5;
+                draw_text(display_text, text_x, text_y, 11.0, value_color);
+
+                // Draw cursor (blinking)
+                let time = macroquad::time::get_time();
+                if (time * 2.0) as i32 % 2 == 0 {
+                    let cursor_x = text_x + text_dims.width + 1.0;
+                    draw_line(cursor_x, rect.y + 3.0, cursor_x, rect.bottom() - 3.0, 1.0, ACCENT_COLOR);
+                }
+
+                // Handle keyboard input
+                while let Some(c) = get_char_pressed() {
+                    if c.is_ascii_digit() || c == '.' || c == '-' {
+                        buffer.push(c);
+                    }
+                }
+
+                // Handle backspace
+                if is_key_pressed(KeyCode::Backspace) {
+                    buffer.pop();
+                }
+
+                // Handle Enter - confirm edit
+                if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter) {
+                    if let Ok(v) = buffer.parse::<f32>() {
+                        new_value = Some(v);
+                    }
+                    *ef = None;
+                    buffer.clear();
+                }
+
+                // Handle Escape - cancel edit
+                if is_key_pressed(KeyCode::Escape) {
+                    *ef = None;
+                    buffer.clear();
+                }
+
+                // Click outside to confirm
+                if ctx.mouse.left_pressed && !hovered {
+                    if let Ok(v) = buffer.parse::<f32>() {
+                        new_value = Some(v);
+                    }
+                    *ef = None;
+                    buffer.clear();
+                }
+            }
+        }
+    } else {
+        // Normal display mode
+        let value_str = format!("{:.2}", value);
+        let value_dims = measure_text(&value_str, None, 11, 1.0);
+        let value_x = rect.x + (rect.w - value_dims.width) * 0.5;
+        let text_y = rect.y + rect.h * 0.5 + 4.0;
+        draw_text(&value_str, value_x, text_y, 11.0, value_color);
+
+        // Handle double-click to start editing
+        if let (Some(ef), Some((buffer, field_id))) = (editing_field, edit_state) {
+            if hovered && ctx.mouse.double_clicked {
+                *ef = Some(field_id);
+                *buffer = format!("{:.2}", value);
+            }
+        }
+
+        // Handle drag interaction
+        // Start dragging on mouse press
+        if hovered && ctx.mouse.left_pressed && !*is_dragging {
+            *is_dragging = true;
+            *drag_start_value = value;
+            *drag_start_x = ctx.mouse.x;
+            ctx.dragging = Some(drag_id);
+        }
+
+        // Continue dragging
+        if *is_dragging && ctx.mouse.left_down {
+            let delta_x = ctx.mouse.x - *drag_start_x;
+            let new_val = *drag_start_value + delta_x * step;
+            new_value = Some(new_val);
+        }
+
+        // End dragging
+        if *is_dragging && !ctx.mouse.left_down {
+            *is_dragging = false;
+            ctx.dragging = None;
+        }
+    }
+
+    DragValueResult {
+        value: new_value,
+        dragging: *is_dragging,
+    }
+}

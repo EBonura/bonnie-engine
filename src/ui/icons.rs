@@ -31,6 +31,8 @@ pub mod icon {
     pub const CIRCLE_CHEVRON_RIGHT: char = '\u{e4df}';
     pub const CHEVRON_UP: char = '\u{e071}';
     pub const CHEVRON_DOWN: char = '\u{e06e}';
+    pub const CHEVRON_LEFT: char = '\u{e06f}';
+    pub const CHEVRON_RIGHT: char = '\u{e070}';
 
     // Link/Unlink (for vertex mode)
     pub const LINK: char = '\u{e104}';
@@ -64,6 +66,7 @@ pub mod icon {
     pub const MUSIC: char = '\u{e122}';       // Music/notes
     pub const PIANO: char = '\u{e2ea}';       // Piano (keyboard icon)
     pub const LIST_MUSIC: char = '\u{e10b}';  // Arrangement/playlist
+    pub const NOTEBOOK_PEN: char = '\u{e596}'; // Arrangement (notebook with pen)
 
     // Tab bar icons
     pub const HOUSE: char = '\u{e0f5}';           // Home tab

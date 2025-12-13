@@ -142,6 +142,9 @@ pub struct EditorState {
     pub grid_size: f32, // World units per grid cell
     pub show_grid: bool,
 
+    /// 3D viewport settings
+    pub show_room_bounds: bool, // Show room boundary wireframes
+
     /// Vertex editing mode
     pub link_coincident_vertices: bool, // When true, moving a vertex moves all vertices at same position
 
@@ -187,6 +190,19 @@ pub struct EditorState {
     /// Properties panel scroll offset
     pub properties_scroll: f32,
 
+    /// UV editing drag state (for drag-value widgets)
+    pub uv_drag_active: [bool; 5],      // [x_offset, y_offset, x_scale, y_scale, angle]
+    pub uv_drag_start_value: [f32; 5],
+    pub uv_drag_start_x: [f32; 5],
+
+    /// UV editing link state (when true, dragging X also changes Y)
+    pub uv_offset_linked: bool,
+    pub uv_scale_linked: bool,
+
+    /// UV editing text input state (for double-click manual entry)
+    pub uv_editing_field: Option<usize>,  // Which field is being edited (0-4 = offset x/y, scale x/y, angle)
+    pub uv_edit_buffer: String,           // Text input buffer
+
     /// Placement height adjustment (for DrawFloor/DrawCeiling/DrawWall modes)
     pub placement_target_y: f32,           // Current Y height for new placements
     pub height_adjust_mode: bool,          // True when Shift is held for height adjustment
@@ -196,6 +212,9 @@ pub struct EditorState {
 
     /// Rasterizer settings (PS1 effects)
     pub raster_settings: RasterSettings,
+
+    /// Selected vertex indices for color editing (0-3 for face corners)
+    pub selected_vertex_indices: Vec<usize>,
 }
 
 impl EditorState {
@@ -251,6 +270,7 @@ impl EditorState {
             grid_zoom: 0.1, // Pixels per world unit (very zoomed out for TRLE 1024-unit sectors)
             grid_size: SECTOR_SIZE, // TRLE sector size
             show_grid: true,
+            show_room_bounds: true, // Show room boundaries by default
             link_coincident_vertices: true, // Default to linked mode
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -273,12 +293,20 @@ impl EditorState {
             selected_pack: 0,
             texture_scroll: 0.0,
             properties_scroll: 0.0,
+            uv_drag_active: [false; 5],
+            uv_drag_start_value: [0.0; 5],
+            uv_drag_start_x: [0.0; 5],
+            uv_offset_linked: true,  // Default to linked
+            uv_scale_linked: true,   // Default to linked
+            uv_editing_field: None,
+            uv_edit_buffer: String::new(),
             placement_target_y: 0.0,
             height_adjust_mode: false,
             height_adjust_start_mouse_y: 0.0,
             height_adjust_start_y: 0.0,
             height_adjust_locked_pos: None,
             raster_settings: RasterSettings::default(), // backface_cull=true shows backfaces as wireframe
+            selected_vertex_indices: Vec::new(),
         }
     }
 
@@ -297,10 +325,17 @@ impl EditorState {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.selection = Selection::None;
+        self.selected_vertex_indices.clear();
         // Clamp current_room to valid range
         if self.current_room >= self.level.rooms.len() {
             self.current_room = 0;
         }
+    }
+
+    /// Set the current selection and clear vertex color selection
+    pub fn set_selection(&mut self, selection: Selection) {
+        self.selection = selection;
+        self.selected_vertex_indices.clear();
     }
 
     /// Set a status message that will be displayed for a duration
